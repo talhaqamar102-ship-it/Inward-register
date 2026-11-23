@@ -463,6 +463,322 @@ export function createPendingOrderBatch(database, payload, {
   }
 }
 
+export function updatePendingOrder(database, orderId, payload, {
+  actor = 'System Operator',
+  role = 'SUPER_USER',
+  recordAuditLog
+} = {}) {
+  const normalizedOrderId = String(orderId || '').trim();
+  if (!normalizedOrderId) throw setStatus(new Error('orderId is required'), 400);
+  if (typeof recordAuditLog !== 'function') {
+    throw new Error('Order update requires an audit logger');
+  }
+
+  const schema = getOrderSchemaSupport(database);
+  const hasDeletedAt = database.prepare(`PRAGMA table_info(pending_orders)`).all().some(c => c.name === 'deleted_at');
+  const existingTables = new Set(
+    database.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all().map(r => r.name)
+  );
+
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const existing = database.prepare(
+      `SELECT * FROM pending_orders WHERE order_id = ?${hasDeletedAt ? ' AND deleted_at IS NULL' : ''}`
+    ).get(normalizedOrderId);
+    if (!existing) {
+      throw setStatus(new Error(`Pending Order ${normalizedOrderId} not found`), 404);
+    }
+
+    const mergedPayload = {
+      ...(payload || {}),
+      customerId: schema.hasIdsCol ? (existing.customer_id || '') : (payload?.customerId || ''),
+      productId: schema.hasIdsCol ? (existing.product_id || '') : (payload?.productId || ''),
+      buyer: existing.buyer_name || '',
+      article: existing.article_name || '',
+      sizeFormat: schema.hasSizeFormatCol ? (existing.size_format || 'LEGACY_7_11') : 'LEGACY_7_11',
+      po: payload?.po !== undefined ? payload.po : (existing.po_number || ''),
+      color: payload?.color !== undefined ? payload.color : (existing.color_shade || 'Standard'),
+      dueDate: payload?.dueDate !== undefined ? payload.dueDate : (payload?.due_date !== undefined ? payload.due_date : (existing.due_date || '')),
+      notes: payload?.notes !== undefined ? payload.notes : (existing.notes || ''),
+      maker: payload?.maker !== undefined ? payload.maker : (existing.maker_contractor || '')
+    };
+
+    const norm = normalizePendingOrderPayload(database, schema, mergedPayload);
+    if (norm.totalQty <= 0) {
+      throw setStatus(new Error('Order total quantity must be greater than 0.'), 400);
+    }
+
+    // Guardrail 1: Total received & requested floors
+    if (existingTables.has('store_receivings')) {
+      const totalRcvd = Number(
+        database.prepare(`
+          SELECT COALESCE(SUM(rcvd_pairs), 0) AS total_rcvd
+          FROM store_receivings
+          WHERE order_id = ? AND COALESCE(is_voided, 0) = 0
+        `).get(normalizedOrderId)?.total_rcvd || 0
+      );
+      if (norm.totalQty < totalRcvd) {
+        throw setStatus(
+          new Error(`Cannot reduce order total to ${norm.totalQty} pairs; ${totalRcvd} pairs have already been received.`),
+          400
+        );
+      }
+    }
+
+    if (existingTables.has('glove_requisitions')) {
+      const totalReq = Number(
+        database.prepare(`
+          SELECT COALESCE(SUM(requested_pairs), 0) AS total_req
+          FROM glove_requisitions
+          WHERE order_id = ? AND COALESCE(is_voided, 0) = 0
+        `).get(normalizedOrderId)?.total_req || 0
+      );
+      if (norm.totalQty < totalReq) {
+        throw setStatus(
+          new Error(`Cannot reduce order total to ${norm.totalQty} pairs; ${totalReq} pairs have already been requested by Packing Hall.`),
+          400
+        );
+      }
+    }
+
+    // Guardrail 2: Per-size received floor
+    if (existingTables.has('receiving_size_breakdowns') && existingTables.has('store_receivings')) {
+      const rcvdBySize = database.prepare(`
+        SELECT rsb.size_code, COALESCE(SUM(rsb.rcvd_pairs), 0) AS rcvd
+        FROM receiving_size_breakdowns rsb
+        JOIN store_receivings sr ON sr.rcv_number = rsb.rcv_number
+        WHERE sr.order_id = ? AND COALESCE(sr.is_voided, 0) = 0
+        GROUP BY rsb.size_code
+      `).all(normalizedOrderId);
+
+      const newSizesMap = norm.sizeFormat === 'LEGACY_7_11'
+        ? { '7': norm.size7, '8': norm.size8, '9': norm.size9, '10': norm.size10, '11': norm.size11 }
+        : JSON.parse(norm.orderSizesJson || '{}');
+
+      for (const row of rcvdBySize) {
+        const rcvd = Number(row.rcvd || 0);
+        if (rcvd <= 0) continue;
+        const nextSz = Number(newSizesMap[row.size_code] || 0);
+        if (nextSz < rcvd) {
+          throw setStatus(
+            new Error(`Cannot reduce size ${row.size_code} to ${nextSz}; ${rcvd} pairs have already been received.`),
+            400
+          );
+        }
+      }
+    }
+
+    // Guardrail 3: Per-contractor received floor
+    if (schema.hasAllocTable && existingTables.has('store_receivings')) {
+      const rcvdByMaker = database.prepare(`
+        SELECT maker_contractor, COALESCE(SUM(rcvd_pairs), 0) AS rcvd
+        FROM store_receivings
+        WHERE order_id = ? AND COALESCE(is_voided, 0) = 0
+        GROUP BY LOWER(TRIM(maker_contractor))
+      `).all(normalizedOrderId);
+
+      for (const row of rcvdByMaker) {
+        const rcvd = Number(row.rcvd || 0);
+        if (rcvd <= 0) continue;
+        const makerKey = String(row.maker_contractor || '').trim().toLowerCase();
+        const matched = norm.normalizedAllocations.find(
+          a => String(a.maker || '').trim().toLowerCase() === makerKey
+        );
+        if (!matched) {
+          throw setStatus(
+            new Error(`Cannot remove contractor "${row.maker_contractor}" because ${rcvd} pairs have already been received from them.`),
+            400
+          );
+        }
+        if (matched.total < rcvd) {
+          throw setStatus(
+            new Error(`Cannot reduce allocation for "${row.maker_contractor}" to ${matched.total}; ${rcvd} pairs have already been received from them.`),
+            400
+          );
+        }
+      }
+
+      // Guardrail 4: Per-contractor per-size received floor
+      if (existingTables.has('receiving_size_breakdowns')) {
+        const rcvdByMakerSize = database.prepare(`
+          SELECT sr.maker_contractor, rsb.size_code, COALESCE(SUM(rsb.rcvd_pairs), 0) AS rcvd
+          FROM receiving_size_breakdowns rsb
+          JOIN store_receivings sr ON sr.rcv_number = rsb.rcv_number
+          WHERE sr.order_id = ? AND COALESCE(sr.is_voided, 0) = 0
+          GROUP BY LOWER(TRIM(sr.maker_contractor)), rsb.size_code
+        `).all(normalizedOrderId);
+
+        for (const row of rcvdByMakerSize) {
+          const rcvd = Number(row.rcvd || 0);
+          if (rcvd <= 0) continue;
+          const makerKey = String(row.maker_contractor || '').trim().toLowerCase();
+          const matched = norm.normalizedAllocations.find(
+            a => String(a.maker || '').trim().toLowerCase() === makerKey
+          );
+          if (!matched) continue; // Already caught by Guardrail 3 above
+          const allocSizesMap = matched.sizesMap
+            || (norm.sizeFormat === 'LEGACY_7_11'
+              ? { '7': matched.s7, '8': matched.s8, '9': matched.s9, '10': matched.s10, '11': matched.s11 }
+              : JSON.parse(matched.sizesJson || '{}'));
+          const nextSz = Number(allocSizesMap[row.size_code] || 0);
+          if (nextSz < rcvd) {
+            throw setStatus(
+              new Error(`Cannot reduce size ${row.size_code} for "${row.maker_contractor}" to ${nextSz}; ${rcvd} pairs have already been received from them.`),
+              400
+            );
+          }
+        }
+      }
+    }
+
+    // Persist updated order row
+    if (schema.hasSizeFormatCol && schema.hasDueDateCol) {
+      database.prepare(`
+        UPDATE pending_orders
+        SET maker_contractor = ?, po_number = ?, color_shade = ?,
+            sizes_json = ?, size_7 = ?, size_8 = ?, size_9 = ?, size_10 = ?, size_11 = ?,
+            total_qty = ?, due_date = ?, notes = ?
+        WHERE order_id = ?
+      `).run(
+        norm.maker,
+        norm.po,
+        norm.color,
+        norm.orderSizesJson,
+        norm.size7,
+        norm.size8,
+        norm.size9,
+        norm.size10,
+        norm.size11,
+        norm.totalQty,
+        norm.dueDate,
+        norm.notes,
+        normalizedOrderId
+      );
+    } else if (schema.hasDueDateCol) {
+      database.prepare(`
+        UPDATE pending_orders
+        SET maker_contractor = ?, po_number = ?, color_shade = ?,
+            size_7 = ?, size_8 = ?, size_9 = ?, size_10 = ?, size_11 = ?,
+            total_qty = ?, due_date = ?, notes = ?
+        WHERE order_id = ?
+      `).run(
+        norm.maker,
+        norm.po,
+        norm.color,
+        norm.size7,
+        norm.size8,
+        norm.size9,
+        norm.size10,
+        norm.size11,
+        norm.totalQty,
+        norm.dueDate,
+        norm.notes,
+        normalizedOrderId
+      );
+    } else {
+      database.prepare(`
+        UPDATE pending_orders
+        SET maker_contractor = ?, po_number = ?, color_shade = ?,
+            size_7 = ?, size_8 = ?, size_9 = ?, size_10 = ?, size_11 = ?,
+            total_qty = ?, notes = ?
+        WHERE order_id = ?
+      `).run(
+        norm.maker,
+        norm.po,
+        norm.color,
+        norm.size7,
+        norm.size8,
+        norm.size9,
+        norm.size10,
+        norm.size11,
+        norm.totalQty,
+        norm.notes,
+        normalizedOrderId
+      );
+    }
+
+    // Replace contractor allocations
+    if (schema.hasAllocTable) {
+      database.prepare(`DELETE FROM order_contractor_allocations WHERE order_id = ?`).run(normalizedOrderId);
+      if (schema.hasAllocSizeFormatCol) {
+        const insertAlloc = database.prepare(`
+          INSERT INTO order_contractor_allocations (
+            order_id, maker_contractor, size_format, sizes_json,
+            size_7, size_8, size_9, size_10, size_11, total_qty, due_date
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const a of norm.normalizedAllocations) {
+          insertAlloc.run(
+            normalizedOrderId,
+            a.maker,
+            norm.sizeFormat,
+            a.sizesJson,
+            a.s7,
+            a.s8,
+            a.s9,
+            a.s10,
+            a.s11,
+            a.total,
+            a.dueDate
+          );
+        }
+      } else {
+        const insertAlloc = database.prepare(`
+          INSERT INTO order_contractor_allocations (
+            order_id, maker_contractor, size_7, size_8, size_9, size_10, size_11, total_qty, due_date
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const a of norm.normalizedAllocations) {
+          insertAlloc.run(normalizedOrderId, a.maker, a.s7, a.s8, a.s9, a.s10, a.s11, a.total, a.dueDate);
+        }
+      }
+    }
+
+    // Recalculate cumulative GRN balance_qty and status
+    if (existingTables.has('store_receivings')) {
+      const rcvRows = database.prepare(`
+        SELECT id, rcvd_pairs
+        FROM store_receivings
+        WHERE order_id = ? AND COALESCE(is_voided, 0) = 0
+        ORDER BY id ASC
+      `).all(normalizedOrderId);
+      let cum = 0;
+      const updateGrnBal = database.prepare(
+        `UPDATE store_receivings SET order_qty = ?, balance_qty = ?, status = ? WHERE id = ?`
+      );
+      for (const r of rcvRows) {
+        cum += Number(r.rcvd_pairs || 0);
+        const bal = Math.max(0, norm.totalQty - cum);
+        const st = bal === 0 ? 'COMPLETE' : 'PARTIAL';
+        updateGrnBal.run(norm.totalQty, bal, st, r.id);
+      }
+    }
+
+    recordAuditLog({
+      actor,
+      role,
+      action: 'ORDER_ADJUST',
+      entityId: normalizedOrderId,
+      orderId: normalizedOrderId,
+      beforeSummary: `${existing.total_qty} Prs · ${existing.maker_contractor} · Due ${existing.due_date || 'none'}`,
+      afterSummary: `${norm.totalQty} Prs · ${norm.maker} · Due ${norm.dueDate || 'none'}`,
+      reason: String(payload?.reason || '').trim()
+    });
+
+    database.exec('COMMIT');
+    return { orderId: normalizedOrderId };
+  } catch (error) {
+    try {
+      database.exec('ROLLBACK');
+    } catch {
+      // Preserve the original transaction error.
+    }
+    throw error;
+  }
+}
+
 export function deletePendingOrder(database, orderId, {
   actor = 'System Operator',
   role = 'SUPER_USER',
@@ -478,7 +794,10 @@ export function deletePendingOrder(database, orderId, {
 
   database.exec('BEGIN IMMEDIATE');
   try {
-    const order = database.prepare(`SELECT * FROM active_orders WHERE order_id = ?`).get(normalizedOrderId);
+    const hasDeletedAt = database.prepare(`PRAGMA table_info(pending_orders)`).all().some(c => c.name === 'deleted_at');
+    const order = database.prepare(
+      `SELECT * FROM pending_orders WHERE order_id = ?${hasDeletedAt ? ' AND deleted_at IS NULL' : ''}`
+    ).get(normalizedOrderId);
     if (!order) throw setStatus(new Error(`Pending Order ${normalizedOrderId} not found`), 404);
 
     const linkedReceiving = database.prepare(`

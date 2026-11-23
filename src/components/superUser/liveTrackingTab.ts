@@ -413,6 +413,8 @@ export function renderLiveTrackingTab(ctx: SuperUserRenderContext): string {
               </div>
             </div>
             <div class="su-lt-actions">
+              <button type="button" class="btn-outline su-lt-btn" data-su-action="edit-pending-order" data-order-id="${escapeHtml(ord.orderId)}">Edit order</button>
+              <button type="button" class="btn-outline su-lt-btn" data-su-action="open-qc-dispatch" data-order-id="${escapeHtml(ord.orderId)}">Open QC &amp; dispatch</button>
               ${
                 ord.contractorBalanceQty > 0 && ord.receivedGrnQty > 0 && !ord.shortClosed
                   ? `<button type="button" class="su-lt-btn su-lt-btn--ghost" title="Close order short-shipped at ${n(ord.receivedGrnQty)} received pairs" data-su-action="short-close-order" data-order-id="${escapeHtml(ord.orderId)}">Short-close</button>`
@@ -521,6 +523,7 @@ export function renderLiveTrackingTab(ctx: SuperUserRenderContext): string {
             </td>
             <td class="text-center" style="white-space:nowrap">
               <button type="button" class="table-btn su-lt-link" data-su-action="open-req-screen" data-req-number="${escapeHtml(r.reqNumber)}" data-target-screen="screen-packing">Floor</button>
+              ${r.awaitingFinalQc || r.packedStage5Pairs > 0 ? `<button type="button" class="table-btn su-lt-link" data-su-action="open-qc-dispatch" data-req-number="${escapeHtml(r.reqNumber)}">QC</button>` : ''}
               ${voidCheck.allowed ? `<button type="button" class="table-btn su-lt-link su-lt-link--danger" title="${escapeHtml(voidCheck.reason)}" data-su-action="void-req" data-req-number="${escapeHtml(r.reqNumber)}">Void</button>` : ''}
             </td>
           </tr>`;

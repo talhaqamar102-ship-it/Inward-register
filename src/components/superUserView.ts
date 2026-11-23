@@ -2,6 +2,7 @@ import type { SuperUserRenderContext } from './superUser/types';
 import { renderAdminNavIcon } from './superUser/shared';
 import { renderDashboardTab } from './superUser/dashboardTab';
 import { renderLiveTrackingTab } from './superUser/liveTrackingTab';
+import { computeQcDispatchMetrics, renderQcDispatchTab } from './superUser/qcDispatchTab';
 import { renderOrderCreationTab } from './superUser/orderCreationTab';
 import { renderReportsTab } from './superUser/reportsTab';
 import { renderUsersTab } from './superUser/usersTab';
@@ -11,6 +12,8 @@ export type {
   SuperUserReportType,
   SystemUserRecord,
   AdminOrderArticleLine,
+  QcDispatchCartonRow,
+  QcDispatchReqRow,
   SuperUserRenderContext
 } from './superUser/types';
 export {
@@ -24,6 +27,7 @@ export {
 } from './superUser/shared';
 export { renderDashboardTab } from './superUser/dashboardTab';
 export { renderLiveTrackingTab } from './superUser/liveTrackingTab';
+export { computeQcDispatchMetrics, renderQcDispatchTab, buildDispatchManifestPrintHtml } from './superUser/qcDispatchTab';
 export { renderOrderCreationTab } from './superUser/orderCreationTab';
 export {
   buildSuperUserReportHtml,
@@ -42,12 +46,18 @@ export function renderSuperUserScreen(ctx: SuperUserRenderContext): string {
     ) || s.totalScrappedPairs * 150;
 
   const isCreationTab = ctx.activeTab === 'orders' || ctx.activeTab === 'creation';
+  const qcDispatchRows = ctx.qcDispatchRows || [];
+  const qcAwaitingCount = qcDispatchRows.filter(
+    r => computeQcDispatchMetrics(r).status !== 'Ready to release'
+  ).length;
 
   let tabBody = '';
   if (ctx.activeTab === 'dashboard') {
     tabBody = renderDashboardTab(ctx, totalScrapDeduction);
   } else if (ctx.activeTab === 'tracking') {
     tabBody = renderLiveTrackingTab(ctx);
+  } else if (ctx.activeTab === 'qc-dispatch') {
+    tabBody = renderQcDispatchTab(ctx);
   } else if (ctx.activeTab === 'users') {
     tabBody = renderUsersTab(ctx);
   } else if (isCreationTab) {
@@ -61,7 +71,7 @@ export function renderSuperUserScreen(ctx: SuperUserRenderContext): string {
       <!-- Sub-Header Bar -->
       <div class="sub-header-bar">
         <h1 class="sub-header-title">
-          <span>Super User Control Center &mdash; Dashboard, Live Tracking, Order Creation, User Management &amp; Reports</span>
+          <span>Super User Control Center &mdash; Dashboard, Live Tracking, QC &amp; Dispatch, Order Creation, User Management &amp; Reports</span>
         </h1>
         <div class="sub-header-right">
           <button class="btn-outline" id="btn-admin-refresh" style="padding: 4px 10px; font-size: 12px;">
@@ -96,6 +106,14 @@ export function renderSuperUserScreen(ctx: SuperUserRenderContext): string {
                   <span class="admin-tab-label">Live Tracking</span>
                 </span>
                 <span class="admin-tab-count">${s.totalOrders} Orders &bull; ${s.totalGrnCount} GRNs &bull; ${s.totalReqCount} REQs</span>
+              </button>
+              <button type="button" class="admin-tab-btn ${ctx.activeTab === 'qc-dispatch' ? 'active' : ''}"
+                aria-label="QC &amp; Dispatch" data-admin-tab="qc-dispatch"${ctx.activeTab === 'qc-dispatch' ? ' aria-current="page"' : ''}${ctx.adminNavCollapsed ? ' title="QC & Dispatch"' : ''}>
+                <span class="admin-tab-heading">
+                  <span class="admin-tab-icon" aria-hidden="true">${renderAdminNavIcon('qc-dispatch')}</span>
+                  <span class="admin-tab-label">QC &amp; Dispatch</span>
+                </span>
+                <span class="admin-tab-count">${qcAwaitingCount} awaiting</span>
               </button>
               <button type="button" class="admin-tab-btn ${isCreationTab ? 'active' : ''}"
                 aria-label="Order Creation" data-admin-tab="orders"${isCreationTab ? ' aria-current="page"' : ''}${ctx.adminNavCollapsed ? ' title="Order Creation"' : ''}>

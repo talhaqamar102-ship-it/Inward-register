@@ -422,12 +422,15 @@ export function scaleSizeBreakdown(sizes: SizeBreakdown, targetTotal: number): S
 /**
  * 1.2 — Legacy sub-tab normalizer: redirects any legacy tab ID to a canonical view.
  */
-export type CanonicalSuperUserTab = 'dashboard' | 'tracking' | 'creation' | 'users' | 'reports';
+export type CanonicalSuperUserTab = 'dashboard' | 'tracking' | 'qc-dispatch' | 'creation' | 'users' | 'reports';
 
 export function normalizeSuperUserTab(tabId?: string | null): CanonicalSuperUserTab {
   const raw = (tabId || '').trim().toLowerCase();
   if (raw === 'tracking' || raw === 'traceability' || raw === 'ledger' || raw === 'live') {
     return 'tracking';
+  }
+  if (raw === 'qc-dispatch' || raw === 'qc' || raw === 'dispatch') {
+    return 'qc-dispatch';
   }
   if (raw === 'creation' || raw === 'orders' || raw === 'admin' || raw === 'registry' || raw === 'master') {
     return 'creation';

@@ -9,7 +9,27 @@ import type {
   CatalogProductOption
 } from '../../utils/requisitionLogic';
 
-export type SuperUserTab = 'dashboard' | 'tracking' | 'orders' | 'creation' | 'users' | 'reports';
+export type SuperUserTab = 'dashboard' | 'tracking' | 'qc-dispatch' | 'orders' | 'creation' | 'users' | 'reports';
+
+export interface QcDispatchCartonRow {
+  cartonNo: string;
+  pairs: number;
+  dims: string;
+  cbm: number;
+  shippingMode: 'UNASSIGNED' | 'AIR' | 'SEA';
+  sealNo: string;
+}
+
+export interface QcDispatchReqRow {
+  reqNumber: string;
+  orderId: string;
+  article: string;
+  po: string;
+  stage4Passed: number;
+  finalQcApproved: boolean;
+  dispatched?: boolean;
+  cartons: QcDispatchCartonRow[];
+}
 export type SuperUserReportType =
   | 'order_grn_balance'
   | 'req_traceability'
@@ -103,4 +123,7 @@ export interface SuperUserRenderContext {
   multiArticlePickerOpen?: boolean;
   multiArticleSearch?: string;
   openRegistryIds?: Record<string, boolean>;
+  qcDispatchRows?: QcDispatchReqRow[];
+  qcDispatchSelectedReq?: string;
+  qcDispatchOrderFilter?: string;
 }

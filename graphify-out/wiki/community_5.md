@@ -1,6 +1,6 @@
 # C5: Automated Verification & DBRE Test Suites (test/)
 
-Cohesion Score: `0.5` • Total Nodes: 10
+Cohesion Score: `0.5` • Total Nodes: 9
 
 ## Nodes in Community
 
@@ -13,4 +13,3 @@ Cohesion Score: `0.5` • Total Nodes: 10
 - **test/db-reliability.test.js** (`file:test/db-reliability.test.js`) — `test/db-reliability.test.js:L1` (degree: 1)
 - **apiFetch()** (`fn:test/http.test.js:apiFetch`) — `test/http.test.js:L79-L79` (degree: 1)
 - **orderPayload()** (`fn:test/order-integrity.test.js:orderPayload`) — `test/order-integrity.test.js:L41-L53` (degree: 1)
-- **test/orchestrator.test.js** (`file:test/orchestrator.test.js`) — `test/orchestrator.test.js:L1` (degree: 0)

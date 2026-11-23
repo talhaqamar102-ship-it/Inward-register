@@ -317,6 +317,103 @@
   color: var(--ink-600, #52525B);
 }
 
+/* ---------- edit order modal ---------- */
+.su-edit-order-body {
+  font-size: 13px;
+}
+.su-edit-order-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--ink-50);
+  margin-bottom: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.su-edit-order-summary-label {
+  font-size: 11px;
+  color: var(--ink-500);
+}
+.su-edit-order-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.su-edit-order-meta-grid .form-group {
+  margin-bottom: 0;
+}
+.su-edit-order-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 10px;
+  overflow-x: auto;
+}
+.su-edit-order-table-wrap .data-table {
+  margin: 0;
+}
+.su-edit-order-maker-cell {
+  padding: 6px;
+  min-width: 140px;
+}
+.su-edit-order-row-maker {
+  font-size: 12px;
+  padding: 4px 6px;
+}
+.su-edit-order-cell {
+  padding: 4px;
+}
+.su-edit-order-size-val {
+  width: 66px;
+  text-align: right;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.su-edit-order-row-due {
+  font-size: 12px;
+  padding: 4px 6px;
+  width: 132px;
+}
+.su-edit-order-row-total {
+  padding: 6px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.su-edit-order-remove-row {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+.su-edit-order-split-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.su-edit-order-add-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.su-edit-order-grand-wrap {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.su-edit-order-reason-group {
+  margin-bottom: 12px;
+}
+.su-edit-order-pwd-group {
+  margin-bottom: 14px;
+}
+.su-edit-order-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* ---------- touch (factory tablets) ---------- */
 @media (pointer: coarse) {
   .superuser-command-center .su-vg-link { min-height: 44px; padding: 0 12px; }

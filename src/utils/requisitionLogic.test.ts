@@ -54,8 +54,6 @@ import {
   canVoidRequisitionLot,
   canRolePerformAction,
   createAuditTrailEntry,
-  createDemo600PairScenario,
-  replayDemo600PairScenarioStepByStep,
   buildRequisitionAnalyticsSeries,
   getSuperUserStatusBadgeClass,
   renderRequisitionWipAnalyticsChart,
@@ -78,6 +76,8 @@ import {
   OrderWipState
 } from './requisitionLogic';
 import { renderSuperUserScreen, renderDashboardVisualGraphs, SuperUserRenderContext } from '../components/superUserView';
+import { renderQcDispatchTab, buildDispatchManifestPrintHtml } from '../components/superUser/qcDispatchTab';
+import { createDemo600PairScenario, replayDemo600PairScenarioStepByStep } from './requisition/demoScenarios';
 
 test('R1, 2.8, 3.8, 4.6, 4.7: authoritative size set constant supports standard 7..11 and extended 6..12 plus configurable policy defaults', () => {
   assert.deepEqual(STANDARD_GLOVE_SIZES, ['7', '8', '9', '10', '11']);
@@ -104,6 +104,7 @@ test('1.2: normalizeSuperUserTab redirects legacy tab IDs to canonical views', (
   assert.equal(normalizeSuperUserTab('admin'), 'creation');
   assert.equal(normalizeSuperUserTab('user-management'), 'users');
   assert.equal(normalizeSuperUserTab('analytics'), 'reports');
+  assert.equal(normalizeSuperUserTab('dispatch'), 'qc-dispatch');
 });
 
 test('4.2: determineOrderActiveStage and canExecuteStage5CartonPacking enforce Stage 4 -> Final QC -> Stage 5 lock gate', () => {
@@ -1027,6 +1028,15 @@ test('5.1-8.5, 6.6, 9.6, 12.2: Super User 5-view DOM rendering, <150ms Tier-1->T
   assert.ok(usersHtml.includes('<select id="admin-user-station" class="form-select">'));
   assert.ok(usersHtml.includes('<option value="Dock #1">Inward Register (Dock #1)</option>'));
   assert.ok(usersHtml.includes('<option value="Packing Hall #1" selected>Packing Hall</option>'));
+  assert.ok(usersHtml.includes('<option value="SUPER_USER">'));
+  assert.ok(usersHtml.includes('<option value="INWARD_CLERK">'));
+  assert.ok(usersHtml.includes('<option value="PACKING_SUPERVISOR">'));
+  assert.ok(!usersHtml.includes('<option value="QC_INSPECTOR">'));
+  assert.ok(!usersHtml.includes('<option value="ALTERATION_LEAD">'));
+  assert.ok(!usersHtml.includes('<option value="Final QC">'));
+  assert.ok(!usersHtml.includes('<option value="Alteration Bay">'));
+  assert.equal(canRolePerformAction('PACKING_SUPERVISOR', 'STAGE_5_CARTON_SEAL'), false);
+  assert.equal(canRolePerformAction('SUPER_USER', 'STAGE_5_CARTON_SEAL'), true);
   assert.ok(usersHtml.includes('class="su-perm-disclosure"'), 'Users table uses disclosure toggle instead of truncating Authorized Actions');
   assert.equal(getDefaultStationForRole('SUPER_USER'), 'Super User');
   assert.equal(getDefaultStationForRole('INWARD_CLERK'), 'Dock #1');
@@ -2343,4 +2353,83 @@ test('Branching Order Tree: groups linked sub-orders (-1, -2) under parent order
   assert.ok(html.includes('data-sub-order="ORD-2026-005-2"'));
   assert.ok(html.includes('data-slip-type="M-REQ" data-ref-code="M-REQ-2026-0001"'));
   assert.ok(html.includes('data-slip-type="A-REQ" data-ref-code="A-REQ-2026-0001"'));
+});
+
+test('Super User QC & Dispatch tab renders AQL/Release states and monochrome manifest print HTML', () => {
+  const baseCtx: SuperUserRenderContext = {
+    activeTab: 'qc-dispatch',
+    activeReport: 'order_grn_balance',
+    trackingSearch: '',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: {},
+    pendingOrders: [],
+    dropdownOptions: { makers: [], customers: [], articles: [], poList: [] },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers: [],
+      products: [],
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: {
+      totalOrders: 0,
+      totalGrnCount: 0,
+      totalReqCount: 0,
+      totalPlannedPairs: 0,
+      totalReceivedGrnPairs: 0,
+      totalIssuedReqPairs: 0,
+      stage4PackedPairs: 0,
+      stage5PackedPairs: 0,
+      totalInAlterationPairs: 0,
+      totalScrappedPairs: 0,
+      orderRollups: [],
+      reqRollups: [],
+      openDockVariances: 0
+    } as any,
+    qcDispatchSelectedReq: 'REQ-2026-0002',
+    qcDispatchRows: [
+      {
+        reqNumber: 'REQ-2026-0001',
+        orderId: 'ORD-2026-001',
+        article: 'V3-TEST',
+        po: 'PO-1',
+        stage4Passed: 100,
+        finalQcApproved: false,
+        cartons: []
+      },
+      {
+        reqNumber: 'REQ-2026-0002',
+        orderId: 'ORD-2026-002',
+        article: 'V3-READY',
+        po: 'PO-2',
+        stage4Passed: 100,
+        finalQcApproved: true,
+        cartons: [
+          { cartonNo: 'CTN-REQ-2026-0002-001', pairs: 50, dims: '45 × 35 × 30', cbm: 0.0473, shippingMode: 'AIR', sealNo: 'SEAL-1' },
+          { cartonNo: 'CTN-REQ-2026-0002-002', pairs: 50, dims: '60 × 40 × 35', cbm: 0.084, shippingMode: 'SEA', sealNo: 'SEAL-2' }
+        ]
+      }
+    ]
+  };
+
+  const tabHtml = renderQcDispatchTab(baseCtx);
+  assert.ok(tabHtml.includes('id="qcd-order-select"'));
+  assert.ok(tabHtml.includes('id="qcd-req-select"'));
+  assert.ok(tabHtml.includes('id="qcd-bulk-dispatch-bar"'));
+  assert.ok(tabHtml.includes('id="qcd-air-cartons-input"'));
+  assert.ok(tabHtml.includes('id="qcd-sea-cartons-input"'));
+  assert.ok(tabHtml.includes('data-qcd-action="save-air-sea-split"'));
+  assert.ok(tabHtml.includes('Awaiting AQL'));
+  assert.ok(tabHtml.includes('data-qcd-action="aql"'));
+  assert.ok(tabHtml.includes('Ready to release'));
+  assert.match(tabHtml, /<button[^>]*id="qcd-release-btn"[^>]*>/);
+  const releaseBtnTag = tabHtml.match(/<button[^>]*id="qcd-release-btn"[^>]*>/)?.[0] || '';
+  assert.ok(!releaseBtnTag.includes('disabled'));
+
+  const printHtml = buildDispatchManifestPrintHtml(baseCtx.qcDispatchRows![1], '21-11-2026');
+  assert.ok(printHtml.includes('REQ-2026-0002'));
+  assert.ok(!printHtml.includes('--su-'));
+  assert.equal(/#[0-9a-fA-F]{3,6}/.test(printHtml), false);
 });

@@ -34,11 +34,9 @@ export function renderUsersTab(ctx: SuperUserRenderContext): string {
             <div class="form-group">
               <label for="admin-user-role">Assigned Role</label>
               <select id="admin-user-role" class="form-select">
-                <option value="SUPER_USER">SUPER_USER (All Permissions)</option>
-                <option value="INWARD_CLERK">INWARD_CLERK (GRN + Dock Issue)</option>
-                <option value="PACKING_SUPERVISOR">PACKING_SUPERVISOR (REQ + WIP)</option>
-                <option value="QC_INSPECTOR">QC_INSPECTOR (Final QC Gate)</option>
-                <option value="ALTERATION_LEAD">ALTERATION_LEAD (A-REQ + Scrap)</option>
+                <option value="SUPER_USER">SUPER_USER (All Permissions — Orders, QC, Cartons &amp; Dispatch)</option>
+                <option value="INWARD_CLERK">INWARD_CLERK (GRN, Dock Issue &amp; Alteration Bay)</option>
+                <option value="PACKING_SUPERVISOR">PACKING_SUPERVISOR (REQ &amp; Floor Stages 1–4)</option>
               </select>
             </div>
             <div class="form-group">
@@ -47,8 +45,6 @@ export function renderUsersTab(ctx: SuperUserRenderContext): string {
                 <option value="Super User">Super User</option>
                 <option value="Dock #1">Inward Register (Dock #1)</option>
                 <option value="Packing Hall #1" selected>Packing Hall</option>
-                <option value="Final QC">Final QC</option>
-                <option value="Alteration Bay">Alteration Bay</option>
               </select>
             </div>
             <button type="button" class="btn-primary" id="btn-admin-add-system-user" data-su-action="add-system-user" style="background: var(--su-req-primary); border-color: var(--su-req-dark);">Create account</button>

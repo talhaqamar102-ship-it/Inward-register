@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { db, backupDatabase, initDatabase } from '../db.js';
 import { AQLService } from './aqlService.js';
-import { createPendingOrder, createPendingOrderBatch, deletePendingOrder } from './orderService.js';
+import { createPendingOrder, createPendingOrderBatch, updatePendingOrder, deletePendingOrder } from './orderService.js';
 
 const REQUISITION_SIZES = ['7', '8', '9', '10', '11'];
 
@@ -579,6 +579,22 @@ export class PackingService {
   }
 
   // --- STEP 5: 2ND PACKING (PAIRS INTO CARTONS) ---
+  static parseDimensionsCbm(dimensionsCm = '60x40x35') {
+    const raw = String(dimensionsCm || '60x40x35').trim();
+    const match = raw.match(/(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)/i);
+    if (!match) {
+      return { dimensionsCm: '60x40x35', cbm: 0.084 };
+    }
+    const l = Number(match[1]);
+    const w = Number(match[2]);
+    const h = Number(match[3]);
+    if (!Number.isFinite(l) || !Number.isFinite(w) || !Number.isFinite(h) || l <= 0 || w <= 0 || h <= 0) {
+      return { dimensionsCm: '60x40x35', cbm: 0.084 };
+    }
+    const cbm = Number(((l * w * h) / 1000000).toFixed(4));
+    return { dimensionsCm: `${l}x${w}x${h}`, cbm };
+  }
+
   static executeStep5SecondPacking(reqNumber, pairsPerCartonOverride = null, options = {}) {
     const req = this.getRequisition(reqNumber);
     if (!req || !req.wip) throw new Error(`Requisition ${reqNumber} not found`);
@@ -597,23 +613,86 @@ export class PackingService {
       }
     }
 
-    const pairsPerCarton = pairsPerCartonOverride || req.pairs_per_carton || 50;
-    const totalCartons = Math.ceil(pairsReady / pairsPerCarton);
+    const pairsPerCarton = Number(pairsPerCartonOverride || req.pairs_per_carton || 50);
+    if (!Number.isFinite(pairsPerCarton) || pairsPerCarton <= 0) {
+      throw new Error(`Invalid pairs per carton: ${pairsPerCartonOverride}`);
+    }
 
-    // Delete existing cartons if re-packing
-    db.prepare(`DELETE FROM cartons WHERE req_number = ?`).run(reqNumber);
+    const { dimensionsCm, cbm } = this.parseDimensionsCbm(options?.dimensionsCm || '60x40x35');
+    const rawMode = String(options?.shippingMode || 'UNASSIGNED').toUpperCase();
+    const shippingMode = ['AIR', 'SEA', 'UNASSIGNED'].includes(rawMode) ? rawMode : 'UNASSIGNED';
+    const sealPrefix = String(options?.sealPrefix || 'QC-SEAL').trim() || 'QC-SEAL';
+    const dispatchedAt = shippingMode === 'AIR' || shippingMode === 'SEA' ? new Date().toISOString() : null;
 
-    let remaining = pairsReady;
-    for (let i = 1; i <= totalCartons; i++) {
-      const thisCartonPairs = Math.min(remaining, pairsPerCarton);
-      const cartonBarcode = `CTN-${reqNumber}-${String(i).padStart(3, '0')}`;
+    const requestedPairs = options?.pairsToPack != null ? Number(options.pairsToPack) : null;
+
+    if (requestedPairs == null) {
+      // Legacy full repack: replace existing cartons and box all step4_packing_good pairs
+      const totalCartons = Math.ceil(pairsReady / pairsPerCarton);
+      db.prepare(`DELETE FROM cartons WHERE req_number = ?`).run(reqNumber);
+
+      let remaining = pairsReady;
+      for (let i = 1; i <= totalCartons; i++) {
+        const thisCartonPairs = Math.min(remaining, pairsPerCarton);
+        const cartonBarcode = `CTN-${reqNumber}-${String(i).padStart(3, '0')}`;
+        const sealNo = `${sealPrefix}-${9080 + i}`;
+        db.prepare(`
+          INSERT INTO cartons (carton_barcode, req_number, carton_number, total_cartons, pairs_count, status, dimensions_cm, cbm, shipping_mode, dispatched_at, qc_seal_no)
+          VALUES (?, ?, ?, ?, ?, 'PACKED', ?, ?, ?, ?, ?)
+        `).run(cartonBarcode, reqNumber, i, totalCartons, thisCartonPairs, dimensionsCm, cbm, shippingMode, dispatchedAt, sealNo);
+        remaining -= thisCartonPairs;
+      }
+
       db.prepare(`
-        INSERT INTO cartons (carton_barcode, req_number, carton_number, total_cartons, pairs_count, status)
-        VALUES (?, ?, ?, ?, ?, 'PACKED')
-      `).run(cartonBarcode, reqNumber, i, totalCartons, thisCartonPairs);
+        UPDATE packing_wip
+        SET step5_cartons_packed = ?,
+            step5_pairs_packed = ?,
+            current_step = CASE WHEN final_qc_status = 'APPROVED_DISPATCH' THEN 'DISPATCH_APPROVED' ELSE 'FINAL_QC' END,
+            final_qc_status = CASE WHEN final_qc_status = 'APPROVED_DISPATCH' THEN 'APPROVED_DISPATCH' ELSE 'PENDING' END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE req_number = ?
+      `).run(totalCartons, pairsReady, reqNumber);
+
+      return this.getRequisition(reqNumber);
+    }
+
+    // Partial / incremental carton boxing
+    if (!Number.isFinite(requestedPairs) || requestedPairs <= 0) {
+      throw new Error(`Pairs to box must be greater than 0.`);
+    }
+
+    const existingStats = db.prepare(`
+      SELECT COUNT(*) as cnt, COALESCE(SUM(pairs_count), 0) as boxed_pairs, COALESCE(MAX(carton_number), 0) as max_ctn
+      FROM cartons WHERE req_number = ?
+    `).get(reqNumber);
+
+    const alreadyBoxed = Number(existingStats?.boxed_pairs || 0);
+    const remainingToBox = Math.max(0, pairsReady - alreadyBoxed);
+    if (requestedPairs > remainingToBox) {
+      throw new Error(`Cannot box ${requestedPairs} pairs; only ${remainingToBox} pairs remain unboxed.`);
+    }
+
+    const newCartonsCount = Math.ceil(requestedPairs / pairsPerCarton);
+    const prevCount = Number(existingStats?.cnt || 0);
+    const startNo = Number(existingStats?.max_ctn || 0) + 1;
+    const newTotalCartons = prevCount + newCartonsCount;
+
+    let remaining = requestedPairs;
+    for (let offset = 0; offset < newCartonsCount; offset++) {
+      const ctnNo = startNo + offset;
+      const thisCartonPairs = Math.min(remaining, pairsPerCarton);
+      const cartonBarcode = `CTN-${reqNumber}-${String(ctnNo).padStart(3, '0')}`;
+      const sealNo = `${sealPrefix}-${9080 + ctnNo}`;
+      db.prepare(`
+        INSERT INTO cartons (carton_barcode, req_number, carton_number, total_cartons, pairs_count, status, dimensions_cm, cbm, shipping_mode, dispatched_at, qc_seal_no)
+        VALUES (?, ?, ?, ?, ?, 'PACKED', ?, ?, ?, ?, ?)
+      `).run(cartonBarcode, reqNumber, ctnNo, newTotalCartons, thisCartonPairs, dimensionsCm, cbm, shippingMode, dispatchedAt, sealNo);
       remaining -= thisCartonPairs;
     }
 
+    db.prepare(`UPDATE cartons SET total_cartons = ? WHERE req_number = ?`).run(newTotalCartons, reqNumber);
+
+    const totalBoxedPairs = alreadyBoxed + requestedPairs;
     db.prepare(`
       UPDATE packing_wip
       SET step5_cartons_packed = ?,
@@ -622,7 +701,111 @@ export class PackingService {
           final_qc_status = CASE WHEN final_qc_status = 'APPROVED_DISPATCH' THEN 'APPROVED_DISPATCH' ELSE 'PENDING' END,
           updated_at = CURRENT_TIMESTAMP
       WHERE req_number = ?
-    `).run(totalCartons, pairsReady, reqNumber);
+    `).run(newTotalCartons, totalBoxedPairs, reqNumber);
+
+    return this.getRequisition(reqNumber);
+  }
+
+  static dispatchCartons(
+    reqNumber,
+    { shippingMode, cartonBarcodes = null, cartonCount = null, airCartons = null, seaCartons = null, release = false } = {}
+  ) {
+    const req = this.getRequisition(reqNumber);
+    if (!req) throw new Error(`Requisition ${reqNumber} not found`);
+
+    if (airCartons != null || seaCartons != null) {
+      const allCartons = db.prepare(`
+        SELECT carton_barcode FROM cartons WHERE req_number = ? ORDER BY carton_number ASC
+      `).all(reqNumber);
+      const airN = Math.max(0, Math.floor(Number(airCartons || 0)));
+      const seaN = Math.max(0, Math.floor(Number(seaCartons || 0)));
+      if (airN + seaN > allCartons.length) {
+        throw new Error(`Air (${airN}) + Sea (${seaN}) exceeds total boxed cartons (${allCartons.length}).`);
+      }
+      const nowIso = new Date().toISOString();
+      const updateOne = db.prepare(`
+        UPDATE cartons SET shipping_mode = ?, dispatched_at = ? WHERE req_number = ? AND carton_barcode = ?
+      `);
+      allCartons.forEach((row, idx) => {
+        if (idx < airN) {
+          updateOne.run('AIR', nowIso, reqNumber, row.carton_barcode);
+        } else if (idx < airN + seaN) {
+          updateOne.run('SEA', nowIso, reqNumber, row.carton_barcode);
+        } else {
+          updateOne.run('UNASSIGNED', null, reqNumber, row.carton_barcode);
+        }
+      });
+      return this.getRequisition(reqNumber);
+    }
+
+    if (release) {
+      if (!req.wip || req.wip.final_qc_status !== 'APPROVED_DISPATCH') {
+        throw new Error(`Complete AQL 1.5 inspection for ${reqNumber} before releasing.`);
+      }
+      const allCartons = db.prepare(`SELECT shipping_mode FROM cartons WHERE req_number = ?`).all(reqNumber);
+      if (allCartons.length === 0) {
+        throw new Error(`Box at least one master carton for ${reqNumber} before releasing.`);
+      }
+      const unassigned = allCartons.filter(c => !c.shipping_mode || c.shipping_mode === 'UNASSIGNED').length;
+      if (unassigned > 0) {
+        throw new Error(`Assign Air or Sea to all ${unassigned} unassigned carton(s) before releasing.`);
+      }
+      db.prepare(`UPDATE glove_requisitions SET status = 'DISPATCHED' WHERE req_number = ?`).run(reqNumber);
+      db.prepare(`
+        UPDATE packing_wip SET current_step = 'DISPATCH_APPROVED', updated_at = CURRENT_TIMESTAMP WHERE req_number = ?
+      `).run(reqNumber);
+      return this.getRequisition(reqNumber);
+    }
+
+    const mode = String(shippingMode || '').toUpperCase();
+    if (!['AIR', 'SEA', 'UNASSIGNED'].includes(mode)) {
+      throw new Error(`Invalid shipping mode: ${shippingMode}. Expected AIR, SEA, or UNASSIGNED.`);
+    }
+
+    const dispatchedAt = mode === 'UNASSIGNED' ? null : new Date().toISOString();
+
+    if (Array.isArray(cartonBarcodes) && cartonBarcodes.length > 0) {
+      const placeholders = cartonBarcodes.map(() => '?').join(',');
+      db.prepare(`
+        UPDATE cartons
+        SET shipping_mode = ?, dispatched_at = ?
+        WHERE req_number = ? AND carton_barcode IN (${placeholders})
+      `).run(mode, dispatchedAt, reqNumber, ...cartonBarcodes);
+      return this.getRequisition(reqNumber);
+    }
+
+    if (cartonCount != null && Number(cartonCount) > 0) {
+      const limit = Number(cartonCount);
+      let rows = db.prepare(`
+        SELECT carton_barcode FROM cartons
+        WHERE req_number = ? AND (shipping_mode IS NULL OR shipping_mode = 'UNASSIGNED')
+        ORDER BY carton_number ASC
+        LIMIT ?
+      `).all(reqNumber, limit);
+      if (rows.length === 0) {
+        rows = db.prepare(`
+          SELECT carton_barcode FROM cartons
+          WHERE req_number = ?
+          ORDER BY carton_number ASC
+          LIMIT ?
+        `).all(reqNumber, limit);
+      }
+      if (rows.length > 0) {
+        const placeholders = rows.map(() => '?').join(',');
+        db.prepare(`
+          UPDATE cartons
+          SET shipping_mode = ?, dispatched_at = ?
+          WHERE req_number = ? AND carton_barcode IN (${placeholders})
+        `).run(mode, dispatchedAt, reqNumber, ...rows.map(r => r.carton_barcode));
+      }
+      return this.getRequisition(reqNumber);
+    }
+
+    db.prepare(`
+      UPDATE cartons
+      SET shipping_mode = ?, dispatched_at = ?
+      WHERE req_number = ?
+    `).run(mode, dispatchedAt, reqNumber);
 
     return this.getRequisition(reqNumber);
   }
@@ -839,7 +1022,7 @@ export class PackingService {
       canonicalStitcher = matchedStitcher.name;
     }
 
-    const effectiveMakerContractor = String(makerContractor || canonicalHall || '').trim();
+    let effectiveMakerContractor = String(makerContractor || canonicalHall || '').trim();
     if (!effectiveMakerContractor || !effectiveArticle) {
       throw new Error('Maker/Contractor and Article are required');
     }
@@ -857,7 +1040,9 @@ export class PackingService {
     }
 
     const rcvdNum = Number(rcvdPairs || 0);
-    const orderNum = Number(orderQty || rcvdNum || 0);
+    const orderNum = linkedOrder
+      ? Number(linkedOrder.total_qty || orderQty || rcvdNum || 0)
+      : Number(orderQty || rcvdNum || 0);
     if (rcvdNum <= 0) {
       throw new Error('Received pairs count must be greater than 0');
     }
@@ -866,6 +1051,9 @@ export class PackingService {
       const allocRows = db.prepare(`
         SELECT * FROM order_contractor_allocations WHERE order_id = ? ORDER BY id ASC
       `).all(orderIdVal);
+      if (allocRows.length === 0 && linkedOrder.maker_contractor) {
+        effectiveMakerContractor = linkedOrder.maker_contractor;
+      }
       if (allocRows.length > 0) {
         const matchedAlloc = allocRows.find(
           a => String(a.maker_contractor || '').trim().toLowerCase() === effectiveMakerContractor.toLowerCase()
@@ -893,7 +1081,16 @@ export class PackingService {
       }
     }
 
-    const balanceNum = Math.max(0, orderNum - rcvdNum);
+    const priorOrderRcvd = linkedOrder
+      ? Number(
+          db.prepare(`
+            SELECT COALESCE(SUM(rcvd_pairs), 0) AS total_rcvd
+            FROM store_receivings
+            WHERE order_id = ? AND COALESCE(is_voided, 0) = 0
+          `).get(orderIdVal)?.total_rcvd || 0
+        )
+      : 0;
+    const balanceNum = Math.max(0, orderNum - (priorOrderRcvd + rcvdNum));
 
     const year = new Date().getFullYear();
     const rcvPrefix = `RCV-${year}-`;
@@ -945,16 +1142,25 @@ export class PackingService {
       Number(overageAllowedPct || 2.0)
     );
 
-    // Save size breakdown if provided
+    // Save size breakdown if provided (cumulative across non-voided GRNs on the same order)
     if (Array.isArray(sizes) && sizes.length > 0) {
       const insertSize = db.prepare(`
         INSERT INTO receiving_size_breakdowns (rcv_number, size_code, order_pairs, rcvd_pairs, balance_pairs)
         VALUES (?, ?, ?, ?, ?)
       `);
+      const sumPriorSizeStmt = linkedOrder
+        ? db.prepare(`
+            SELECT COALESCE(SUM(rsb.rcvd_pairs), 0) AS prior_rcvd
+            FROM receiving_size_breakdowns rsb
+            JOIN store_receivings sr ON sr.rcv_number = rsb.rcv_number
+            WHERE sr.order_id = ? AND COALESCE(sr.is_voided, 0) = 0 AND rsb.size_code = ? AND sr.rcv_number != ?
+          `)
+        : null;
       for (const s of sizes) {
         const o = Number(s.orderPairs || 0);
         const r = Number(s.rcvdPairs || 0);
-        const b = Math.max(0, o - r);
+        const priorSz = sumPriorSizeStmt ? Number(sumPriorSizeStmt.get(orderIdVal, s.sizeCode, rcvNumber)?.prior_rcvd || 0) : 0;
+        const b = Math.max(0, o - (priorSz + r));
         insertSize.run(rcvNumber, s.sizeCode, o, r, b);
       }
     }
@@ -1357,29 +1563,48 @@ export class PackingService {
     const totalCartons = cartons.length;
     const totalPairs = cartons.reduce((sum, c) => sum + Number(c.pairs_count), 0);
     const totalGrossWt = cartons.reduce((sum, c) => sum + Number(c.gross_weight_kg || 4.8), 0);
-    const totalCBM = (totalCartons * (0.6 * 0.4 * 0.35)).toFixed(2); // 0.084 CBM per ctn
+    const totalCbmNum = cartons.reduce((sum, c) => {
+      const parsed = c.cbm != null ? Number(c.cbm) : this.parseDimensionsCbm(c.dimensions_cm || '60x40x35').cbm;
+      return sum + (Number.isFinite(parsed) ? parsed : 0.084);
+    }, 0);
+
+    const airCartons = cartons.filter(c => c.shipping_mode === 'AIR');
+    const seaCartons = cartons.filter(c => c.shipping_mode === 'SEA');
+    const unshippedCartons = cartons.filter(c => !c.shipping_mode || c.shipping_mode === 'UNASSIGNED');
 
     return {
       reqNumber: req.req_number,
       customerName: req.customer_name,
       articleName: req.product_name,
-      poNumber: req.notes || 'PO-27347',
+      poNumber: req.notes || '',
       totalCartons,
       totalPairs,
       totalGrossWtKg: totalGrossWt.toFixed(1),
-      totalCBM,
-      containerNo: 'MSKU-449102-1',
-      destinationPort: 'Southampton / Felixstowe UK',
-      cartons: cartons.map(c => ({
-        cartonNumber: `CTN-${String(c.carton_number).padStart(2, '0')}`,
-        pairsPerCarton: c.pairs_count,
-        netWeightKg: c.net_weight_kg || 4.2,
-        grossWeightKg: c.gross_weight_kg || 4.8,
-        dimensionsCm: c.dimensions_cm || '60x40x35',
-        barcodeVerified: true,
-        qcSealNo: c.qc_seal_no || `QC-SEAL-${9080 + c.carton_number}`,
-        aqlStatus: c.aql_status || 'PASSED'
-      }))
+      totalCBM: totalCbmNum.toFixed(3),
+      airCartons: airCartons.length,
+      airPairs: airCartons.reduce((sum, c) => sum + Number(c.pairs_count), 0),
+      seaCartons: seaCartons.length,
+      seaPairs: seaCartons.reduce((sum, c) => sum + Number(c.pairs_count), 0),
+      unshippedCartons: unshippedCartons.length,
+      unshippedPairs: unshippedCartons.reduce((sum, c) => sum + Number(c.pairs_count), 0),
+      cartons: cartons.map(c => {
+        const parsed = this.parseDimensionsCbm(c.dimensions_cm || '60x40x35');
+        const cbmVal = c.cbm != null ? Number(c.cbm) : parsed.cbm;
+        return {
+          cartonBarcode: c.carton_barcode,
+          cartonNumber: `CTN-${String(c.carton_number).padStart(2, '0')}`,
+          pairsPerCarton: c.pairs_count,
+          netWeightKg: c.net_weight_kg || 4.2,
+          grossWeightKg: c.gross_weight_kg || 4.8,
+          dimensionsCm: parsed.dimensionsCm,
+          cbm: Number(cbmVal.toFixed(4)),
+          shippingMode: c.shipping_mode || 'UNASSIGNED',
+          dispatchedAt: c.dispatched_at || null,
+          barcodeVerified: true,
+          qcSealNo: c.qc_seal_no || `QC-SEAL-${9080 + c.carton_number}`,
+          aqlStatus: c.aql_status || 'PASSED'
+        };
+      })
     };
   }
 
@@ -1686,6 +1911,16 @@ export class PackingService {
       recordAuditLog: entry => this.recordAuditLog(entry)
     });
     return { orderId, orderIds: [orderId], orders: this.getPendingOrders() };
+  }
+
+  static updatePendingOrderAdmin(orderId, payload, actor = 'Super User', role = 'SUPER_USER') {
+    this.enforceRolePermission(role, 'ORDER_ADJUST');
+    updatePendingOrder(db, orderId, payload, {
+      actor,
+      role,
+      recordAuditLog: entry => this.recordAuditLog(entry)
+    });
+    return { orderId, orders: this.getPendingOrders() };
   }
 
   static deletePendingOrderAdmin(orderId, actor = 'Super User', role = 'SUPER_USER') {

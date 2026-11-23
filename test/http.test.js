@@ -933,7 +933,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       }, inwardCookie);
       assert.equal(missingReceiver.status, 400);
 
-      // Valid receivedFrom saves receiving, ignoring tampered article & color from client
+      // Valid receivedFrom saves receiving, ignoring tampered buyer/article/color/orderQty from client
       const validGrn = await apiFetch(`${baseUrl}/api/store/receivings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -944,6 +944,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
           customerName: 'TAMPERED-BUYER',
           articleName: 'TAMPERED-ARTICLE',
           colorShade: 'TAMPERED-COLOR',
+          orderQty: 99999,
           receivedFrom: 'Bilal Driver',
           strictInwardEntry: true,
           rcvdPairs: 50
@@ -955,7 +956,28 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       assert.equal(validData.article_name, master.article);
       assert.equal(validData.color_shade, 'Hi-Vis Neon');
       assert.equal(validData.customer_name, master.buyer);
+      assert.equal(validData.order_qty, 200);
+      assert.equal(validData.balance_qty, 150);
       assert.equal(validData.received_from, 'Bilal Driver');
+
+      // Second partial GRN subtracts cumulative prior GRNs on the same order (200 - 50 - 30 = 120)
+      const secondGrn = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rcvDate: '01-11-2026',
+          orderId,
+          makerContractor: 'Hall A',
+          receivedFrom: 'Bilal Driver',
+          strictInwardEntry: true,
+          rcvdPairs: 30
+        })
+      }, inwardCookie);
+      assert.equal(secondGrn.status, 200);
+      const secondData = (await secondGrn.json()).data;
+      assert.equal(secondData.order_qty, 200);
+      assert.equal(secondData.balance_qty, 120);
+      db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(secondData.rcv_number);
     } finally {
       if (rcvNumber) db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNumber);
       if (orderId) {
@@ -1589,6 +1611,200 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       for (const oid of createdOrderIds) {
         db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(oid);
         db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(oid);
+      }
+    }
+  });
+
+  test('API RBAC & Guardrails: PUT /api/admin/pending-orders/:orderId requires SUPER_USER, enforces received floors, recalculates GRN balance, and audits', async () => {
+    const master = db.prepare(`
+      SELECT c.id AS customer_id, c.name AS buyer, p.id AS product_id, p.name AS article
+      FROM customers c JOIN products p ON p.customer_id = c.id
+      LIMIT 1
+    `).get();
+    assert.ok(master);
+
+    let orderId;
+    let rcvNumber;
+    const prevOrders = db.prepare('SELECT order_id FROM pending_orders').all().map(r => r.order_id);
+    try {
+      const orderResp = await apiFetch(`${baseUrl}/api/admin/pending-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: master.customer_id,
+          productId: master.product_id,
+          buyer: master.buyer,
+          maker: 'Hall A',
+          po: 'PO-EDIT-001',
+          article: master.article,
+          color: 'Black',
+          dueDate: '2026-12-01',
+          sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+          totalQty: 200
+        })
+      });
+      assert.equal(orderResp.status, 200);
+      orderId = (await orderResp.json()).data.orderId;
+
+      // Receive 80 pairs on size 7 for Hall A (balance starts at 120)
+      const grnResp = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rcvDate: '23-11-2026',
+          orderId,
+          makerContractor: 'Hall A',
+          receivedFrom: 'Driver Tariq',
+          strictInwardEntry: true,
+          orderQty: 200,
+          rcvdPairs: 80,
+          sizes: [{ sizeCode: '7', orderPairs: 40, rcvdPairs: 80 }]
+        })
+      }, inwardCookie);
+      assert.equal(grnResp.status, 200);
+      rcvNumber = (await grnResp.json()).data.rcv_number;
+
+      // 1. Non-Super-User roles (INWARD_CLERK & PACKING_SUPERVISOR) must get 403
+      const clerkDeny = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dueDate: '2026-12-10',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 }
+        })
+      }, inwardCookie);
+      assert.equal(clerkDeny.status, 403);
+
+      const packingDeny = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dueDate: '2026-12-10',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 }
+        })
+      }, packingCookie);
+      assert.equal(packingDeny.status, 403);
+
+      // 1b. Missing or incorrect Admin password must return 400 / 401
+      const missingPwdFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dueDate: '2026-12-10',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 }
+        })
+      });
+      assert.equal(missingPwdFail.status, 400);
+
+      const wrongPwdFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword: 'Wrong-Admin-Password',
+          dueDate: '2026-12-10',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 }
+        })
+      });
+      assert.equal(wrongPwdFail.status, 401);
+
+      // 2. Super User shrink below already-received size 7 (80 prs) or total (80 prs) must return 400
+      const shrinkSizeFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          sizes: { '7': 50, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [{ maker: 'Hall A', sizes: { '7': 50, '8': 40, '9': 40, '10': 40, '11': 40 } }]
+        })
+      });
+      assert.equal(shrinkSizeFail.status, 400);
+
+      // 3. Super User shrink contractor allocation below already-received pairs (80 prs) must return 400
+      const shrinkMakerFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [
+            { maker: 'Hall A', sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 } },
+            { maker: 'Hall B', sizes: { '7': 30, '8': 40, '9': 40, '10': 40, '11': 40 } }
+          ]
+        })
+      });
+      assert.equal(shrinkMakerFail.status, 400);
+
+      // 3b. Removing contractor who already has received stock (80 prs from Hall A) must return 400
+      const removeMakerFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [
+            { maker: 'Hall B', sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 } }
+          ]
+        })
+      });
+      assert.equal(removeMakerFail.status, 400);
+
+      // 3c. Swapping Size 7 from Hall A to Hall B below Hall A's 80 received pairs on Size 7 must return 400
+      const swapSizeBetweenMakersFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [
+            { maker: 'Hall A', sizes: { '7': 40, '8': 40, '9': 0, '10': 0, '11': 0 } },
+            { maker: 'Hall B', sizes: { '7': 40, '8': 0, '9': 40, '10': 40, '11': 40 } }
+          ]
+        })
+      });
+      assert.equal(swapSizeBetweenMakersFail.status, 400);
+
+      // 4. Valid Super User edit (increase 200 -> 260, split Hall A 140 + Hall B 120, move due date) succeeds, recalculates GRN balance, and audits
+      const validEdit = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          po: 'PO-EDIT-REV2',
+          color: 'Midnight Black',
+          dueDate: '2026-12-15',
+          reason: 'Buyer added 60 pairs on size 7',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [
+            { maker: 'Hall A', sizes: { '7': 100, '8': 40, '9': 0, '10': 0, '11': 0 }, dueDate: '2026-12-15' },
+            { maker: 'Hall B', sizes: { '7': 0, '8': 0, '9': 40, '10': 40, '11': 40 }, dueDate: '2026-12-15' }
+          ]
+        })
+      });
+      assert.equal(validEdit.status, 200);
+      const editJson = await validEdit.json();
+      assert.equal(editJson.success, true);
+      const updatedOrd = editJson.data.orders.find(o => o.orderId === orderId);
+      assert.ok(updatedOrd);
+      assert.equal(updatedOrd.totalQty, 260);
+      assert.equal(updatedOrd.dueDate, '2026-12-15');
+      assert.equal(updatedOrd.po, 'PO-EDIT-REV2');
+
+      const rcvAfter = db.prepare('SELECT order_qty, balance_qty FROM store_receivings WHERE rcv_number = ?').get(rcvNumber);
+      assert.equal(rcvAfter.order_qty, 260);
+      assert.equal(rcvAfter.balance_qty, 180);
+
+      const auditEntry = db.prepare(`SELECT action, after_summary, reason FROM audit_trail WHERE entity_id = ? AND action = 'ORDER_ADJUST'`).get(orderId);
+      assert.ok(auditEntry);
+      assert.match(auditEntry.after_summary, /260 Prs/);
+      assert.equal(auditEntry.reason, 'Buyer added 60 pairs on size 7');
+    } finally {
+      if (rcvNumber) {
+        db.prepare('DELETE FROM receiving_size_breakdowns WHERE rcv_number = ?').run(rcvNumber);
+        db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNumber);
+      }
+      if (orderId && !prevOrders.includes(orderId)) {
+        db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(orderId);
+        db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(orderId);
       }
     }
   });

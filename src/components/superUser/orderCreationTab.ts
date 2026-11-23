@@ -541,6 +541,7 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
                     </td>
                     <td class="text-center" style="white-space: nowrap;">
                       <button type="button" class="table-btn" data-su-action="inspect-order" data-order-id="${escapeHtml(o.orderId)}">Track</button>
+                      <button type="button" class="table-btn" data-su-action="edit-pending-order" data-order-id="${escapeHtml(o.orderId)}">Edit</button>
                       <button type="button" class="table-btn" title="Remove Order" data-su-action="remove-pending-order" data-order-id="${escapeHtml(o.orderId)}">Delete</button>
                     </td>
                   </tr>

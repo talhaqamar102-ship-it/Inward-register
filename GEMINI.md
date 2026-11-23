@@ -29,7 +29,7 @@ Rules:
 ## 1M Context Window & Low-Latency Execution Rules
 
 Rules:
-- **Precision `graphify` lookup first (`Lstart-Lend` + DOM `#id` index)**: Run `npx tsx scripts/graphify.ts query "<function or #dom-id>"` to get the exact `L<start>-L<end>` function range, DOM render line (`renders`), and event handler line (`handled_by`). Read **only** the returned line range in `src/main.ts`, `src/components/superUserView.ts`, `src/utils/requisitionLogic.ts`, or `src/style.css`—never browse those large files sequentially.
+- **Never read `src/main.ts` whole (`MAIN_MAP.md` + `graphify` first)**: Read `MAIN_MAP.md` (and/or run `npx tsx scripts/graphify.ts query "<function or #dom-id>"`) to get the exact `L<start>-L<end>` function range, DOM render line (`renders`), and event handler line (`handled_by`). Read **only** the returned line range in `src/main.ts`, `src/components/superUserView.ts`, `src/utils/requisitionLogic.ts`, or `src/style.css`—never browse those large files sequentially.
 - **Leverage the full 1M token context window (read once, reuse from memory)**: Any file or section already read in the active conversation window stays in memory—never re-read a file that is already in context. When reading for the first time, load all target ranges in **1 single parallel `read_file` batch**.
 - **Confirmation / planning questions ("is that understandable?", "what's your plan?")**: Answer immediately in 1 turn with **0 file reads** (or at most 1 `graphify` lookup). Do not read files until the user confirms to execute.
 - **Zero re-reading between Planner and Executor**: Include exact `Target` snippets in `exit_plan_mode` so the execution model calls `edit_file` immediately on its first step using the shared 1M conversation context.

@@ -77,6 +77,9 @@ function getAllowedRoles(req) {
   if (/^\/wip\/[^/]+\/(step[1-5]-[^/]+|material-requisition)$/.test(path)) {
     return ['SUPER_USER', 'PACKING_SUPERVISOR'];
   }
+  if (/^\/wip\/[^/]+\/dispatch$/.test(path)) {
+    return ['SUPER_USER', 'PACKING_SUPERVISOR', 'QC_INSPECTOR'];
+  }
   if (/^\/material-requisitions\/[^/]+\/issue$/.test(path)) {
     return ['SUPER_USER', 'PACKING_SUPERVISOR'];
   }
@@ -233,23 +236,43 @@ apiRouter.post('/wip/:reqNo/step4-packing', handle((req) => {
 }));
 
 apiRouter.post('/wip/:reqNo/step5-cartons', handle((req) => {
-  const { pairsPerCarton, enforcePreStage5AqlGate } = req.body;
+  const { pairsPerCarton, pairsToPack, dimensionsCm, shippingMode, sealPrefix, enforcePreStage5AqlGate } = req.body || {};
   return PackingService.executeStep5SecondPacking(
     req.params.reqNo,
     pairsPerCarton ? Number(pairsPerCarton) : null,
-    { enforcePreStage5AqlGate: Boolean(enforcePreStage5AqlGate) }
+    {
+      enforcePreStage5AqlGate: Boolean(enforcePreStage5AqlGate),
+      pairsToPack: pairsToPack != null ? Number(pairsToPack) : null,
+      dimensionsCm,
+      shippingMode,
+      sealPrefix
+    }
   );
 }));
 
 apiRouter.post('/wip/:reqNo/step5-cartons-gated', handle((req) => {
   const { role } = getActorMeta(req, 'PACKING_SUPERVISOR');
   PackingService.enforceRolePermission(role, 'STAGE_5_CARTON_SEAL');
-  const { pairsPerCarton } = req.body;
+  const { pairsPerCarton, pairsToPack, dimensionsCm, shippingMode, sealPrefix } = req.body || {};
   return PackingService.executeStep5SecondPacking(
     req.params.reqNo,
     pairsPerCarton ? Number(pairsPerCarton) : null,
-    { enforcePreStage5AqlGate: true }
+    {
+      enforcePreStage5AqlGate: true,
+      pairsToPack: pairsToPack != null ? Number(pairsToPack) : null,
+      dimensionsCm,
+      shippingMode,
+      sealPrefix
+    }
   );
+}));
+
+apiRouter.post('/wip/:reqNo/dispatch', handle((req) => {
+  const { role } = getActorMeta(req, 'PACKING_SUPERVISOR');
+  if (!['SUPER_USER', 'PACKING_SUPERVISOR', 'QC_INSPECTOR'].includes(role)) {
+    throw Object.assign(new Error('Forbidden: insufficient role permissions for carton dispatch.'), { statusCode: 403 });
+  }
+  return PackingService.dispatchCartons(req.params.reqNo, req.body || {});
 }));
 
 // --- FINAL QC INSPECTION ---
@@ -421,6 +444,16 @@ apiRouter.get('/admin/pending-orders', handle(() => {
 apiRouter.post('/admin/pending-orders', handle((req) => {
   const { actor, role } = getActorMeta(req);
   return PackingService.createPendingOrderAdmin(req.body, actor, role);
+}));
+
+apiRouter.put('/admin/pending-orders/:orderId', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  const { adminPassword, ...orderPayload } = req.body || {};
+  AuthService.verifyAdminPassword(req.authUser.userId, adminPassword, {
+    actionLabel: 'order changes',
+    failureMessage: 'Incorrect Admin password. Order changes were not saved.'
+  });
+  return PackingService.updatePendingOrderAdmin(req.params.orderId, orderPayload, actor, role);
 }));
 
 apiRouter.post('/admin/pending-orders/:orderId/short-close', handle((req) => {

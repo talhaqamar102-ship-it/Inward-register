@@ -696,6 +696,15 @@ function migrateDatabase() {
     if (!ctnCols.includes('aql_status')) {
       db.exec(`ALTER TABLE cartons ADD COLUMN aql_status TEXT DEFAULT 'PENDING'`);
     }
+    if (!ctnCols.includes('cbm')) {
+      db.exec(`ALTER TABLE cartons ADD COLUMN cbm REAL DEFAULT 0.084`);
+    }
+    if (!ctnCols.includes('shipping_mode')) {
+      db.exec(`ALTER TABLE cartons ADD COLUMN shipping_mode TEXT DEFAULT 'UNASSIGNED'`);
+    }
+    if (!ctnCols.includes('dispatched_at')) {
+      db.exec(`ALTER TABLE cartons ADD COLUMN dispatched_at DATETIME`);
+    }
   }
 
   if (isTestRuntime()) {
@@ -710,6 +719,31 @@ function migrateDatabase() {
   }
 
   backfillOrderSequence(db);
+
+  try {
+    const orderRcvRows = db.prepare(`
+      SELECT id, order_id, order_qty, rcvd_pairs, COALESCE(is_voided, 0) AS is_voided
+      FROM store_receivings
+      WHERE TRIM(COALESCE(order_id, '')) != ''
+      ORDER BY id ASC
+    `).all();
+    const cumByOrder = new Map();
+    const updateBal = db.prepare(`UPDATE store_receivings SET order_qty = ?, balance_qty = ?, status = ? WHERE id = ?`);
+    const findOrderQty = db.prepare(`SELECT total_qty FROM pending_orders WHERE order_id = ?`);
+    for (const r of orderRcvRows) {
+      if (Number(r.is_voided)) continue;
+      const ordRow = findOrderQty.get(r.order_id);
+      const ordQty = Number(ordRow?.total_qty || r.order_qty || r.rcvd_pairs || 0);
+      const prev = cumByOrder.get(r.order_id) || 0;
+      const nextCum = prev + Number(r.rcvd_pairs || 0);
+      cumByOrder.set(r.order_id, nextCum);
+      const bal = Math.max(0, ordQty - nextCum);
+      const st = bal === 0 ? 'COMPLETE' : 'PARTIAL';
+      updateBal.run(ordQty, bal, st, r.id);
+    }
+  } catch {
+    // Ignore if tables not yet initialized
+  }
 }
 
 function seedInitialData() {

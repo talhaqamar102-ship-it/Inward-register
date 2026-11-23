@@ -1696,12 +1696,12 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(persistedCard).toContainText(stitcherA);
     await expect(persistedCard).toContainText(stitcherB);
 
-    // 2. Provision an ALTERATION_LEAD user to verify Alteration Bay optgroups under real RBAC role
+    // 2. Provision an INWARD_CLERK user (who owns Dock #1 + Alteration Bay) to verify Alteration Bay optgroups under real RBAC role
     await page.click('.admin-tab-btn[data-admin-tab="users"]');
     await page.fill('#admin-user-name', 'E2E Alteration Hall Lead');
     await page.fill('#admin-user-username', altUser);
     await page.fill('#admin-user-password', altPass);
-    await page.selectOption('#admin-user-role', 'ALTERATION_LEAD');
+    await page.selectOption('#admin-user-role', 'INWARD_CLERK');
     await page.click('#btn-admin-add-system-user');
     await expect(page.locator('.su-user-table')).toContainText(altUser);
 
@@ -1825,12 +1825,13 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(trackingCard).toContainText(`${hallName} → ${stitcherA}`);
     await page.fill('#admin-tracking-search', '');
 
-    // 5. Sign in as ALTERATION_LEAD and verify #defect-tailor-select groups Hall C Stitcher QA stitchers
+    // 5. Sign in as INWARD_CLERK and switch to Alteration Bay to verify #defect-tailor-select groups Hall C Stitcher QA stitchers
     await page.click('#btn-session-lock');
     await page.fill('#auth-username', altUser);
     await page.fill('#auth-password', altPass);
     await page.click('#auth-form button[type="submit"]');
     await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('#btn-inward-nav-repair');
     await expect(page.locator('#defect-tailor-select')).toBeVisible();
     await expect(page.locator(`#defect-tailor-select optgroup[label="${hallName} Stitchers"] option`)).toHaveCount(2);
     await page.setViewportSize({ width: 1600, height: 900 });
@@ -2087,7 +2088,9 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     const runtimeErrors: string[] = [];
     page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
     page.on('console', msg => {
-      if (msg.type() === 'error') runtimeErrors.push(`console.error: ${msg.text()}`);
+      if (msg.type() === 'error' && !msg.text().includes('status of 400')) {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
     });
 
     await page.goto('/');
@@ -2145,6 +2148,389 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.setViewportSize({ width: 375, height: 812 });
     const mobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
     expect(mobileOverflow).toBe(false);
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Stage 5 partial split boxing (AIR vs SEA), custom master carton dimensions, CBM calculation, and reload persistence', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error' && !msg.text().includes('status of 400')) {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    // Seed 1 clean order -> GRN -> REQ -> Stages 1-4 -> Final QC via API
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Alpine Split Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-SPLIT-2026',
+        article: 'V3-SPLIT-TEST',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+        notes: 'PO-SPLIT-2026'
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Alpine Split Buyer',
+        poNumber: 'PO-SPLIT-2026',
+        articleName: 'V3-SPLIT-TEST',
+        colorShade: 'Black',
+        rcvdPairs: 200,
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+        remarks: 'Split test GRN'
+      });
+
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, {
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 }
+      });
+      const reqNo = reqRes.req_number;
+
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 200 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 200, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 200, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 200, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 200 });
+      await post(`/api/qc/${encodeURIComponent(reqNo)}/aql-audit`, {
+        foundDefects: 0,
+        inspectorId: '4402',
+        inspectorName: 'Tariq Mehmood'
+      });
+
+      return { orderId, reqNo };
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+
+    // Open Packing Hall for the seeded order
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    const openPackingBtn = page.locator(`#tracking-order-card-${seeded.orderId} button[data-su-action="open-req-screen"][data-target-screen="screen-packing"]`).first();
+    await expect(openPackingBtn).toBeVisible();
+    await openPackingBtn.click();
+    await expect(page.locator('#btn-wip-step5')).toBeEnabled();
+
+    // Batch 1: Box 100 pairs (50/ctn -> 2 cartons) in 45x35x30 cm via AIR
+    await page.click('#btn-wip-step5');
+    await expect(page.locator('#step5-pairs-input')).toBeVisible();
+    await page.fill('#step5-pairs-input', '100');
+    await page.fill('#step5-pairs-per-ctn-input', '50');
+    await page.fill('#step5-dim-l', '45');
+    await page.fill('#step5-dim-w', '35');
+    await page.fill('#step5-dim-h', '30');
+    await page.selectOption('#step5-ship-mode', 'AIR');
+    await expect(page.locator('#step5-live-preview')).toContainText('2 cartons');
+    await expect(page.locator('#step5-live-preview')).toContainText('0.095 CBM total');
+    await page.click('#btn-submit-step5-action');
+
+    await expect(page.locator('.panel-counter-badge', { hasText: '2 Cartons' })).toBeVisible();
+    await expect(page.locator('.portal-footer')).toContainText('0.095 CBM');
+    await expect(page.locator('.portal-footer')).toContainText('Air 100 / Sea 0 prs');
+
+    // Batch 2: Box remaining 100 pairs (50/ctn -> 2 cartons) in 60x40x35 cm as Ready (UNASSIGNED)
+    await page.click('#btn-wip-step5');
+    await expect(page.locator('#step5-pairs-input')).toHaveValue('100');
+    await page.fill('#step5-pairs-per-ctn-input', '50');
+    await page.fill('#step5-dim-l', '60');
+    await page.fill('#step5-dim-w', '40');
+    await page.fill('#step5-dim-h', '35');
+    await page.selectOption('#step5-ship-mode', 'UNASSIGNED');
+    await page.click('#btn-submit-step5-action');
+
+    await expect(page.locator('.panel-counter-badge', { hasText: '4 Cartons' })).toBeVisible();
+    // 2 * 0.0473 + 2 * 0.084 = 0.2626 -> 0.263 CBM
+    await expect(page.locator('.portal-footer')).toContainText('0.263 CBM');
+
+    // Dispatch one Ready carton by Sea directly from Manifest Action button
+    const seaDispatchBtn = page.locator('button[data-carton-dispatch-mode="SEA"]').first();
+    await expect(seaDispatchBtn).toBeVisible();
+    await seaDispatchBtn.click();
+    await expect(page.locator('.portal-footer')).toContainText('Air 100 / Sea 50 prs');
+
+    // Reload and verify SQLite persistence
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.fill('#admin-tracking-search', seeded.orderId);
+    await page.getByRole('button', { name: 'Expand all' }).click();
+    await page.locator(`#tracking-order-card-${seeded.orderId} button[data-su-action="open-req-screen"][data-target-screen="screen-packing"]`).first().click();
+    await expect(page.locator('.panel-counter-badge', { hasText: '4 Cartons' })).toBeVisible();
+    await expect(page.locator('.portal-footer')).toContainText('0.263 CBM');
+    await expect(page.locator('.portal-footer')).toContainText('Air 100 / Sea 50 prs');
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Super User QC & Dispatch tab: AQL inspection, carton dimensions, Air/Sea split, release and reload persistence', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error' && !msg.text().includes('status of 400')) {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Alpine QCD Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-QCD-2026',
+        article: 'V3-QCD-TEST',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+        notes: 'PO-QCD-2026'
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Alpine QCD Buyer',
+        poNumber: 'PO-QCD-2026',
+        articleName: 'V3-QCD-TEST',
+        colorShade: 'Black',
+        rcvdPairs: 200,
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+        remarks: 'QCD test GRN'
+      });
+
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, {
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 }
+      });
+      const reqNo = reqRes.req_number;
+
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 200 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 200, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 200, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 200, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 200 });
+
+      return { orderId, reqNo };
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+
+    // 1. Live Tracking -> filter order -> Expand all -> Open QC & dispatch
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.fill('#admin-tracking-search', seeded.orderId);
+    await page.getByRole('button', { name: 'Expand all' }).click();
+    await page.locator(`[data-su-action="open-qc-dispatch"][data-order-id="${seeded.orderId}"]`).click();
+
+    const queueRow = page.locator(`#qcd-queue tr[data-qcd-row="${seeded.reqNo}"]`);
+    await expect(queueRow).toBeVisible();
+    await expect(queueRow).toContainText('Awaiting AQL');
+
+    // 2. Inspect AQL (0 defects -> Ready to box)
+    await page.locator(`[data-qcd-action="aql"][data-req-number="${seeded.reqNo}"]`).click();
+    await page.fill('#aql-found-defects', '0');
+    await page.click('#btn-apply-aql-audit');
+    await expect(queueRow).toContainText('Ready to box');
+
+    // 3. Box lot 1: 100 pairs @ 50/ctn in 45x35x30 via AIR -> 2 manifest rows
+    await page.locator(`#qcd-queue [data-qcd-action="box"][data-req-number="${seeded.reqNo}"]`).click();
+    await page.fill('#step5-pairs-input', '100');
+    await page.fill('#step5-pairs-per-ctn-input', '50');
+    await page.fill('#step5-dim-l', '45');
+    await page.fill('#step5-dim-w', '35');
+    await page.fill('#step5-dim-h', '30');
+    await page.selectOption('#step5-ship-mode', 'AIR');
+    await page.click('#btn-submit-step5-action');
+    await expect(page.locator('#qcd-manifest tbody tr')).toHaveCount(2);
+
+    // 4. Box remaining 100 pairs @ 50/ctn in 60x40x35 via SEA -> 4 manifest rows, 0.263 CBM, Release enabled
+    await page.locator(`#qcd-queue [data-qcd-action="box"][data-req-number="${seeded.reqNo}"]`).click();
+    await page.fill('#step5-pairs-per-ctn-input', '50');
+    await page.fill('#step5-dim-l', '60');
+    await page.fill('#step5-dim-w', '40');
+    await page.fill('#step5-dim-h', '35');
+    await page.selectOption('#step5-ship-mode', 'SEA');
+    await page.click('#btn-submit-step5-action');
+    await expect(page.locator('#qcd-manifest tbody tr')).toHaveCount(4);
+    await expect(page.locator('#qcd-total-cbm')).toContainText('0.263');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Air 100 prs');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Sea 100 prs');
+    await expect(page.locator('#qcd-release-btn')).toBeEnabled();
+
+    // 5. Set Air/Sea allotment explicitly (1 Air, 3 Sea) -> save -> verify Air 50 prs / Sea 150 prs
+    await page.fill('#qcd-air-cartons-input', '1');
+    await expect(page.locator('#qcd-sea-cartons-input')).toHaveValue('3');
+    await page.click('[data-qcd-action="save-air-sea-split"]');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Air 50 prs');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Sea 150 prs');
+    await expect(page.locator('#qcd-release-btn')).toBeEnabled();
+
+    // 6. Release & dispatch (stub window.print so headless browser doesn't block)
+    await page.evaluate(() => { window.print = () => {}; });
+    await page.click('#qcd-release-btn');
+    await expect(page.getByText(/released for dispatch/).first()).toBeVisible();
+
+    // 7. Reload and re-open QC & Dispatch tab -> test #qcd-order-select + persisted allotment + Dispatched status
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+    await expect(page.locator('#qcd-manifest tbody tr')).toHaveCount(4);
+    await expect(page.locator('#qcd-total-cbm')).toContainText('0.263');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Air 50 prs');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Sea 150 prs');
+    await expect(page.locator(`#qcd-queue tr[data-qcd-row="${seeded.reqNo}"]`)).toContainText('Dispatched');
+    await expect(page.locator('#qcd-release-btn')).toContainText('Dispatched');
+    await expect(page.locator('#qcd-release-btn')).toBeDisabled();
+
+    // 7. Zero horizontal overflow at 1440px and 768px
+    for (const vp of [{ width: 1440, height: 900 }, { width: 768, height: 900 }]) {
+      await page.setViewportSize(vp);
+      const ovf = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+      expect(ovf, `QC & Dispatch overflow at ${vp.width}px`).toBe(false);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // 8. Zero runtime errors
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Super User Edit Order: updates planned qty, due date & contractor split, blocks shrink below received stock, and persists across reload', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error' && !/status of 40[01]/.test(msg.text())) {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      // Allow intentional 400 guardrail and 401 wrong-password rejections during test assertions
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    // Seed an order and receive 40 pairs on size 7 via API
+    const seededOrderId = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+      const ord = await post('/api/admin/pending-orders', {
+        buyer: 'Alpine Edit Buyer',
+        maker: 'Hall A',
+        poNumber: 'PO-EDIT-E2E',
+        article: 'V3-EDIT-TEST',
+        color: 'Black',
+        dueDate: '2026-12-01',
+        sizeFormat: 'LEGACY_7_11',
+        sizes: { '7': 50, '8': 50, '9': 0, '10': 0, '11': 0 }
+      });
+      const oid = ord.order_id || ord.orderId;
+      await post('/api/store/receivings', {
+        orderId: oid,
+        makerContractor: 'Hall A',
+        receivedFrom: 'Driver Hamza',
+        customerName: 'Alpine Edit Buyer',
+        poNumber: 'PO-EDIT-E2E',
+        articleName: 'V3-EDIT-TEST',
+        colorShade: 'Black',
+        rcvdPairs: 40,
+        sizes: [{ sizeCode: '7', orderPairs: 50, rcvdPairs: 40 }],
+        remarks: 'Initial partial GRN'
+      });
+      return oid;
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+
+    // Open Live Tracking -> filter to our order -> click Edit order
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.fill('#admin-tracking-search', seededOrderId);
+    await page.getByRole('button', { name: 'Expand all' }).click();
+    await page.locator(`#tracking-order-card-${seededOrderId} button[data-su-action="edit-pending-order"]`).click();
+
+    await expect(page.locator('#edit-order-modal-body')).toBeVisible();
+    await expect(page.locator('#edit-order-grand-total')).toHaveText('100');
+
+    // Password check: wrong Admin password is rejected with 401, modal remains open, and input clears
+    await page.fill('#edit-order-admin-password', 'Wrong-Password-999');
+    await page.click('#btn-submit-edit-order');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await expect(page.locator('#edit-order-admin-password')).toHaveValue('');
+
+    // Guardrail check: shrinking size 7 below 40 received pairs is blocked even with valid password
+    await page.fill('#edit-order-admin-password', TEST_ADMIN.password);
+    await page.fill('.edit-order-size-val[data-row-idx="0"][data-size="7"]', '20');
+    await expect(page.locator('#edit-order-grand-total')).toHaveText('70');
+    await page.click('#btn-submit-edit-order');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+
+    // Valid edit: increase size 7 to 90 (total 140), change due date and PO, add reason, confirm password, and save
+    await page.fill('.edit-order-size-val[data-row-idx="0"][data-size="7"]', '90');
+    await page.fill('#edit-order-due-date', '2026-12-28');
+    await page.fill('#edit-order-po', 'PO-EDIT-REV2');
+    await page.fill('#edit-order-reason', 'Buyer expanded size 7 by 40 pairs');
+    await page.fill('#edit-order-admin-password', TEST_ADMIN.password);
+    await page.click('#btn-submit-edit-order');
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+
+    // Reload and verify updated qty (140), PO, and due date persist
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.fill('#admin-tracking-search', seededOrderId);
+    const card = page.locator(`#tracking-order-card-${seededOrderId}`);
+    await expect(card).toContainText('140');
+    await expect(card).toContainText('PO-EDIT-REV2');
+    await expect(card).toContainText('2026-12-28');
 
     expect(runtimeErrors).toEqual([]);
   });

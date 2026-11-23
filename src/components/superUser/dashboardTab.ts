@@ -202,7 +202,16 @@ export function renderDashboardTab(ctx: SuperUserRenderContext, totalScrapDeduct
                   <td>${slip('mreq', 'M-REQ', req.mreqNo, req.parentOrderId)}</td>
                   <td>${req.article}</td>
                   <td class="text-right num">${n(req.stage4Passed)}</td>
-                  <td class="text-center">${jumpBtn('screen-qc', req.reqNumber, 'Inspect in final QC')}</td>
+                  <td class="text-center">
+                    <button
+                      type="button"
+                      class="rounded px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-50 hover:text-blue-700"
+                      data-su-action="open-qc-dispatch"
+                      data-req-number="${req.reqNumber}"
+                    >
+                      Open QC &amp; dispatch
+                    </button>
+                  </td>
                 </tr>
               `
             )

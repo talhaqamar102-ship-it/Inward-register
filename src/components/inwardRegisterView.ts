@@ -122,7 +122,19 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
     : state.grnForm.rcvdPairs;
   const orderSplitSummary = formatSplitAllocationSummary(orderAllocations);
   const grnCaps = getGrnRemainingCaps(state.grnForm.pendingOrderId, state.grnForm.maker);
-  const singleLockedAlloc = selectedGrnOrder && orderAllocations.length === 1 ? orderAllocations[0] : null;
+  const singleLockedAlloc = selectedGrnOrder && orderAllocations.length === 1
+    ? orderAllocations[0]
+    : selectedGrnOrder && orderAllocations.length === 0
+      ? {
+          maker: selectedGrnOrder.maker,
+          totalQty: calculateSizeTotal(selectedGrnOrder.sizes),
+          receivedPairs: selectedGrnOrder.receivedPairs || 0,
+          remainingPairs: Math.max(
+            0,
+            calculateSizeTotal(selectedGrnOrder.sizes) - Number(selectedGrnOrder.receivedPairs || 0)
+          )
+        }
+      : null;
   const wip = state.packingWip;
   const baseReq = normalizeBaseReqNumber(wip.selectedBatch);
   const mReq = getMaterialReqNumber(baseReq);
@@ -164,6 +176,7 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                   return `<option value="${o.orderId}" ${state.grnForm.pendingOrderId === o.orderId ? 'selected' : ''}>${escapeHtml(o.orderId)} &middot; ${escapeHtml(o.maker)} &middot; ${escapeHtml(o.article)}</option>`;
                 }).join('')}
               </select>
+              <div class="inward-field-hint">Order details are locked. Only Super User can create or edit orders.</div>
             </div>
             <div class="form-group">
               <label class="inw-label" for="grn-maker">
@@ -179,14 +192,14 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                 <div class="inw-static-sub">Plan ${singleLockedAlloc.totalQty.toLocaleString()} &middot; Received ${Number(singleLockedAlloc.receivedPairs || 0).toLocaleString()} &middot; Balance ${Math.max(0, singleLockedAlloc.remainingPairs ?? (singleLockedAlloc.totalQty - Number(singleLockedAlloc.receivedPairs || 0))).toLocaleString()}</div>
               `
                   : `
-                <select id="grn-maker" class="inw-control">
+                <select id="grn-maker" class="inw-control"${selectedGrnOrder ? '' : ' disabled'}>
                   ${
                     selectedGrnOrder && orderAllocations.length > 0
                       ? `${orderAllocations.length > 1 ? `<option value="" ${!state.grnForm.maker ? 'selected' : ''}>All split contractors (${orderAllocations.length})</option>` : ''}${orderAllocations.map(alloc => {
                           const bal = alloc.remainingPairs ?? Math.max(0, alloc.totalQty - Number(alloc.receivedPairs || 0));
                           return `<option value="${escapeHtml(alloc.maker)}" ${state.grnForm.maker === alloc.maker ? 'selected' : ''}>${escapeHtml(alloc.maker)} (Plan ${alloc.totalQty} &middot; Bal ${bal})</option>`;
                         }).join('')}`
-                      : `<option value="">-- Select maker --</option>${state.dropdownOptions.makers.map(m => `<option value="${escapeHtml(m)}" ${state.grnForm.maker === m ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('')}`
+                      : `<option value="">Select a pending order first (locked by Super User)</option>`
                   }
                 </select>
               `

@@ -541,6 +541,9 @@ export function renderQcScreen(state: RepairAndQcStateShape): string {
         <section class="panel-card">
           <div class="panel-card-header">
             <span class="panel-card-title">Master Shipping Carton Manifest</span>
+            <span class="panel-counter-badge" style="font-variant-numeric: tabular-nums;">
+              ${state.cartons.length} Cartons &bull; ${state.cartons.reduce((s, c) => s + Number(c.cbm ?? 0.084), 0).toFixed(3)} CBM
+            </span>
           </div>
           <div class="table-responsive" style="max-height: 380px; overflow-y: auto;">
             <table class="data-table">
@@ -548,37 +551,44 @@ export function renderQcScreen(state: RepairAndQcStateShape): string {
                 <tr>
                   <th>Carton #</th>
                   <th class="text-right">Pairs / Ctn</th>
-                  <th class="text-right">Net Wt</th>
-                  <th class="text-right">Gross Wt</th>
                   <th>Dimensions (cm)</th>
-                  <th class="text-center">Barcode Verified</th>
+                  <th class="text-right">CBM</th>
                   <th>QC Seal #</th>
-                  <th class="text-center">Status</th>
+                  <th class="text-center">Shipping</th>
+                  <th class="text-center">Action</th>
                 </tr>
               </thead>
               <tbody>
                 ${state.cartons.length === 0 ? `
                   <tr>
-                    <td colspan="8" class="text-center" style="padding: 28px 16px; color: var(--ink-500);">
+                    <td colspan="7" class="text-center" style="padding: 28px 16px; color: var(--ink-500);">
                       No cartons loaded in manifest.
                     </td>
                   </tr>
-                ` : state.cartons.map(c => `
+                ` : state.cartons.map(c => {
+                  const mode = String(c.shippingMode || 'UNASSIGNED').toUpperCase();
+                  const modeLabel = mode === 'AIR' ? 'AIR' : mode === 'SEA' ? 'SEA' : 'Ready';
+                  const modeClass = mode === 'AIR' || mode === 'SEA' ? 'status-pill status-pill-green' : 'status-pill';
+                  return `
                   <tr>
-                    <td class="font-bold">${c.cartonNo}</td>
-                    <td class="text-right font-bold">${c.pairs}</td>
-                    <td class="text-right font-bold">${c.netWt}</td>
-                    <td class="text-right font-bold">${c.grossWt}</td>
-                    <td>${c.dims}</td>
+                    <td class="font-bold">${escapeHtml(c.cartonNo)}</td>
+                    <td class="text-right font-bold" style="font-variant-numeric: tabular-nums;">${c.pairs}</td>
+                    <td style="font-variant-numeric: tabular-nums;">${escapeHtml(c.dims || '60 × 40 × 35')}</td>
+                    <td class="text-right" style="font-variant-numeric: tabular-nums;">${Number(c.cbm ?? 0.084).toFixed(3)}</td>
+                    <td class="font-bold" style="font-family: monospace; font-size: 11.5px;">${escapeHtml(c.sealNo)}</td>
                     <td class="text-center">
-                      <span class="status-pill status-pill-green">Verified ✓</span>
+                      <span class="${modeClass}">${modeLabel}</span>
                     </td>
-                    <td class="font-bold">${c.sealNo}</td>
-                    <td class="text-center">
-                      <span class="status-pill status-pill-green">${c.status}</span>
+                    <td class="text-center" style="white-space: nowrap;">
+                      ${mode === 'UNASSIGNED' ? `
+                        <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-carton-dispatch-mode="AIR" data-carton-no="${escapeHtml(c.cartonNo)}">Air</button>
+                        <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-carton-dispatch-mode="SEA" data-carton-no="${escapeHtml(c.cartonNo)}">Sea</button>
+                      ` : `
+                        <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-carton-dispatch-mode="UNASSIGNED" data-carton-no="${escapeHtml(c.cartonNo)}">Reset</button>
+                      `}
                     </td>
                   </tr>
-                `).join('')}
+                `;}).join('')}
               </tbody>
             </table>
           </div>
@@ -590,11 +600,11 @@ export function renderQcScreen(state: RepairAndQcStateShape): string {
         <div class="footer-stats-left">
           <span>Manifest Cleared: <strong>${state.cartons.length} of ${state.cartons.length} Cartons</strong></span>
           <span class="stat-divider">|</span>
-          <span>Total Pairs: <strong>${state.cartons.reduce((acc, c) => acc + c.pairs, 0)}</strong></span>
+          <span>Total Pairs: <strong>${state.cartons.reduce((acc, c) => acc + Number(c.pairs || 0), 0)}</strong></span>
           <span class="stat-divider">|</span>
-          <span>Total Volume: <strong>${state.cartons.length > 0 ? '2.35 CBM' : '0.00 CBM'}</strong></span>
+          <span>Total Volume: <strong style="font-variant-numeric: tabular-nums;">${state.cartons.reduce((acc, c) => acc + Number(c.cbm ?? 0.084), 0).toFixed(3)} CBM</strong></span>
           <span class="stat-divider">|</span>
-          <span>Container: <strong>${state.qcOrder.container}</strong></span>
+          <span>Split: <strong>Air ${state.cartons.filter(c => c.shippingMode === 'AIR').reduce((s, c) => s + Number(c.pairs || 0), 0)} prs &bull; Sea ${state.cartons.filter(c => c.shippingMode === 'SEA').reduce((s, c) => s + Number(c.pairs || 0), 0)} prs</strong></span>
         </div>
         <div class="footer-actions-right">
           <button class="btn-outline" id="btn-open-aql-calculator">AQL 1.5 Calculator</button>
