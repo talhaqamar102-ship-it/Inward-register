@@ -3144,7 +3144,7 @@
       "source_location": "L1",
       "community": 7,
       "community_label": "AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)",
-      "degree": 9
+      "degree": 10
     },
     {
       "id": "file:GEMINI.md",
@@ -3452,7 +3452,7 @@
       "source_location": "L1",
       "community": 7,
       "community_label": "AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)",
-      "degree": 23
+      "degree": 24
     },
     {
       "id": "file:scripts/rollback-catalog-migration.mjs",
@@ -38020,6 +38020,15 @@
     {
       "source": "file:CLAUDE.md",
       "target": "file:public/style.css",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "CLAUDE.md",
+      "source_location": "L1",
+      "weight": 0.8
+    },
+    {
+      "source": "file:CLAUDE.md",
+      "target": "file:scripts/graphify.ts",
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "CLAUDE.md",

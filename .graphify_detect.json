@@ -1,6 +1,6 @@
 {
   "total_files": 386,
-  "total_words": 431155,
+  "total_words": 430671,
   "files": {
     "code": [
       ".agents/skills/ck/commands/forget.mjs",

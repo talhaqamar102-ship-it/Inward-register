@@ -4,7 +4,7 @@
   "graph": {
     "name": "Hammad Industries MES Knowledge Graph",
     "generator": "graphify",
-    "updated_at": "2026-11-23T11:19:57.851Z",
+    "updated_at": "2026-11-23T11:39:15.887Z",
     "communities": {
       "0": "Frontend MES Screens & UI State (src/main.ts)",
       "1": "Requisition & Multi-Order Pure Logic (src/utils)",
@@ -3171,7 +3171,7 @@
       "source_location": "L1",
       "community": 7,
       "community_label": "AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)",
-      "degree": 9
+      "degree": 10
     },
     {
       "id": "file:GEMINI.md",
@@ -3479,7 +3479,7 @@
       "source_location": "L1",
       "community": 7,
       "community_label": "AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)",
-      "degree": 23
+      "degree": 24
     },
     {
       "id": "file:scripts/rollback-catalog-migration.mjs",
@@ -38055,6 +38055,15 @@
     },
     {
       "source": "file:CLAUDE.md",
+      "target": "file:scripts/graphify.ts",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "CLAUDE.md",
+      "source_location": "L1",
+      "weight": 0.8
+    },
+    {
+      "source": "file:CLAUDE.md",
       "target": "file:server.ts",
       "relation": "references",
       "confidence": "EXTRACTED",
@@ -63420,6 +63429,15 @@
     {
       "source": "file:CLAUDE.md",
       "target": "file:public/style.css",
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "CLAUDE.md",
+      "source_location": "L1",
+      "weight": 0.8
+    },
+    {
+      "source": "file:CLAUDE.md",
+      "target": "file:scripts/graphify.ts",
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "CLAUDE.md",
