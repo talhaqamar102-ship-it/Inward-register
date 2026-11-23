@@ -32,14 +32,14 @@ Never read a whole file over ~500 lines.
 | `src\handlers\packingHandlers.ts` | 597 |
 | `src\handlers\qcDispatchHandlers.ts` | 826 |
 | `src\handlers\repairHandlers.ts` | 546 |
-| `src\handlers\windowActions.ts` | 827 |
+| `src\handlers\windowActions.ts` | 831 |
 | `src\main.ts` | 425 |
 | `src\state\appState.ts` | 480 |
 | `src\state\syncService.ts` | 528 |
 | `src\utils\domModalsAndPrint.ts` | 472 |
 | `src\utils\requisition\analyticsAndFormValidators.ts` | 749 |
 | `src\utils\requisition\demoScenarios.ts` | 429 |
-| `src\utils\requisition\policyRbacAndDemo.ts` | 455 |
+| `src\utils\requisition\policyAndRbac.ts` | 455 |
 | `src\utils\requisition\sizingAndCatalog.ts` | 446 |
 | `src\utils\requisition\slipBuilders.ts` | 400 |
 | `src\utils\requisition\traceabilityEngine.ts` | 1003 |
@@ -274,11 +274,11 @@ Never read a whole file over ~500 lines.
 |   ↳ 234 | | section | Section: Split Return / Scrap Modal & Row Actions |
 |   ↳ 441 | | section | Section: Defect Tag Print & Pareto Export |
 
-## src\handlers\windowActions.ts (827 lines)
+## src\handlers\windowActions.ts (831 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 83–826 | 744 | fn | `registerWindowActions` |
+| 83–830 | 748 | fn | `registerWindowActions` |
 |   ↳ 84 | | section | Section: Tracking & Slip Viewers |
 |   ↳ 85 | | window | `window.adminToggleOrderExpand` |
 |   ↳ 91 | | window | `window.adminSetAllOrdersExpanded` |
@@ -289,29 +289,29 @@ Never read a whole file over ~500 lines.
 |   ↳ 224 | | window | `window.adminSetTrackingPage` |
 |   ↳ 229 | | section | Section: Demo Scenario |
 |   ↳ 230 | | window | `window.adminLoadDemo600Scenario` |
-|   ↳ 283 | | window | `window.adminLoadDemo600PairScenario` |
-|   ↳ 285 | | window | `window.adminRemoveDemo600Scenario` |
-|   ↳ 316 | | section | Section: Voids & Short-Close |
-|   ↳ 317 | | window | `window.adminVoidGrnBatch` |
-|   ↳ 347 | | window | `window.adminVoidReqBatch` |
-|   ↳ 374 | | window | `window.adminCloseOrderShort` |
-|   ↳ 405 | | section | Section: System User Management |
-|   ↳ 406 | | window | `window.adminAddSystemUser` |
-|   ↳ 455 | | window | `window.adminResetSystemUserPassword` |
-|   ↳ 505 | | window | `window.adminDeleteSystemUser` |
-|   ↳ 584 | | section | Section: Quick Order Navigation & Deletion |
-|   ↳ 585 | | window | `window.adminQuickReceiveGrnForOrder` |
-|   ↳ 644 | | window | `window.adminQuickCreateReqForOrder` |
-|   ↳ 650 | | window | `window.adminOpenReqInScreen` |
-|   ↳ 666 | | window | `window.adminRemovePendingOrder` |
-|   ↳ 699 | | window | `window.adminDeleteRecord` |
-|   ↳ 716 | | window | `window.adminRemoveDropdownItem` |
-|   ↳ 741 | | window | `window.adminForceRepair` |
-|   ↳ 762 | | section | Section: Legacy Table Row Actions |
-|   ↳ 763 | | window | `window.viewGrnRecord` |
-|   ↳ 789 | | window | `window.editGrnRecord` |
-|   ↳ 812 | | window | `window.handleDefectAction` |
-|   ↳ 816 | | window | `window.toggleQcCheck` |
+|   ↳ 287 | | window | `window.adminLoadDemo600PairScenario` |
+|   ↳ 289 | | window | `window.adminRemoveDemo600Scenario` |
+|   ↳ 320 | | section | Section: Voids & Short-Close |
+|   ↳ 321 | | window | `window.adminVoidGrnBatch` |
+|   ↳ 351 | | window | `window.adminVoidReqBatch` |
+|   ↳ 378 | | window | `window.adminCloseOrderShort` |
+|   ↳ 409 | | section | Section: System User Management |
+|   ↳ 410 | | window | `window.adminAddSystemUser` |
+|   ↳ 459 | | window | `window.adminResetSystemUserPassword` |
+|   ↳ 509 | | window | `window.adminDeleteSystemUser` |
+|   ↳ 588 | | section | Section: Quick Order Navigation & Deletion |
+|   ↳ 589 | | window | `window.adminQuickReceiveGrnForOrder` |
+|   ↳ 648 | | window | `window.adminQuickCreateReqForOrder` |
+|   ↳ 654 | | window | `window.adminOpenReqInScreen` |
+|   ↳ 670 | | window | `window.adminRemovePendingOrder` |
+|   ↳ 703 | | window | `window.adminDeleteRecord` |
+|   ↳ 720 | | window | `window.adminRemoveDropdownItem` |
+|   ↳ 745 | | window | `window.adminForceRepair` |
+|   ↳ 766 | | section | Section: Legacy Table Row Actions |
+|   ↳ 767 | | window | `window.viewGrnRecord` |
+|   ↳ 793 | | window | `window.editGrnRecord` |
+|   ↳ 816 | | window | `window.handleDefectAction` |
+|   ↳ 820 | | window | `window.toggleQcCheck` |
 
 ## src\main.ts (425 lines)
 
@@ -411,7 +411,7 @@ Never read a whole file over ~500 lines.
 | 22–324 | 303 | fn | `createDemo600PairScenario` |
 | 335–428 | 94 | fn | `replayDemo600PairScenarioStepByStep` |
 
-## src\utils\requisition\policyRbacAndDemo.ts (455 lines)
+## src\utils\requisition\policyAndRbac.ts (455 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|

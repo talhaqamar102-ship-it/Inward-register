@@ -10,7 +10,7 @@ import {
   OrderTraceabilityItem
 } from './wipStageGates';
 import { buildSuperUserOrderRollups } from './traceabilityEngine';
-import { TransactionalOrderLedger } from './policyRbacAndDemo';
+import { TransactionalOrderLedger } from './policyAndRbac';
 
 /**
  * 5.6 & 11.6 — Flagged & Removable 600-Pair Demo Scenario Builder ("1-Order -> 3-GRNs -> 3-REQs").

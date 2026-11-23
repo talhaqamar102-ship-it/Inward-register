@@ -230,6 +230,10 @@ export function registerWindowActions({ lockCurrentSession }: WindowActionDeps):
   window.adminLoadDemo600Scenario = async function(
     phase: 'IN_PROGRESS' | 'COMPLETED' | 'DELIBERATE_VARIANCE' = 'COMPLETED'
   ) {
+    if (!state.currentUser || state.currentUser.role !== 'SUPER_USER') {
+      showToast('Only Super User can load demo scenarios.');
+      return;
+    }
     const { createDemo600PairScenario } = await import('../utils/requisition/demoScenarios');
     const demo = createDemo600PairScenario(phase);
     state.pendingOrders = [
