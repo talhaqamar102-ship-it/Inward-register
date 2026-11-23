@@ -1,6 +1,6 @@
 # C7: AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)
 
-Cohesion Score: `0.67` • Total Nodes: 553
+Cohesion Score: `0.67` • Total Nodes: 554
 
 ## Nodes in Community
 
@@ -546,6 +546,7 @@ Cohesion Score: `0.67` • Total Nodes: 553
 - **.agents/workflows/vue-review.md** (`file:.agents/workflows/vue-review.md`) — `.agents/workflows/vue-review.md:L1` (degree: 0)
 - **.claude-plugin/marketplace.json** (`file:.claude-plugin/marketplace.json`) — `.claude-plugin/marketplace.json:L1` (degree: 0)
 - **.claude/settings.json** (`file:.claude/settings.json`) — `.claude/settings.json:L1` (degree: 0)
+- **.claude/settings.local.json** (`file:.claude/settings.local.json`) — `.claude/settings.local.json:L1` (degree: 0)
 - **.claude/skills/SKILL.md** (`file:.claude/skills/SKILL.md`) — `.claude/skills/SKILL.md:L1` (degree: 0)
 - **.claude/skills/graphify/SKILL.md** (`file:.claude/skills/graphify/SKILL.md`) — `.claude/skills/graphify/SKILL.md:L1` (degree: 0)
 - **.gemini/settings.json** (`file:.gemini/settings.json`) — `.gemini/settings.json:L1` (degree: 0)

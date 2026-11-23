@@ -1,6 +1,6 @@
 {
-  "total_files": 385,
-  "total_words": 431151,
+  "total_files": 386,
+  "total_words": 431155,
   "files": {
     "code": [
       ".agents/skills/ck/commands/forget.mjs",
@@ -368,6 +368,7 @@
       ".claude-plugin/marketplace.json",
       ".claude/CLAUDE.md",
       ".claude/settings.json",
+      ".claude/settings.local.json",
       ".claude/skills/SKILL.md",
       ".claude/skills/graphify/SKILL.md",
       ".gemini/settings.json",

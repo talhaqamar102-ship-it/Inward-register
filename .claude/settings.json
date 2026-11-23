@@ -11,7 +11,7 @@
       "WebSearch",
       "Agent",
       "NotebookEdit",
-      "mcp__*"
+      "mcp__plugin_playwright_playwright__*"
     ],
     "deny": [
       "Bash(rm *)",

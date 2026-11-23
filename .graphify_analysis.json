@@ -979,6 +979,7 @@
       "file:.claude-plugin/marketplace.json",
       "file:.claude/CLAUDE.md",
       "file:.claude/settings.json",
+      "file:.claude/settings.local.json",
       "file:.claude/skills/SKILL.md",
       "file:.claude/skills/graphify/SKILL.md",
       "file:.gemini/settings.json",

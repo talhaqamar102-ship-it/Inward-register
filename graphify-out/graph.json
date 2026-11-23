@@ -4,7 +4,7 @@
   "graph": {
     "name": "Hammad Industries MES Knowledge Graph",
     "generator": "graphify",
-    "updated_at": "2026-11-23T08:00:20.689Z",
+    "updated_at": "2026-11-23T11:19:57.851Z",
     "communities": {
       "0": "Frontend MES Screens & UI State (src/main.ts)",
       "1": "Requisition & Multi-Order Pure Logic (src/utils)",
@@ -3113,6 +3113,17 @@
       "kind": "file",
       "file_type": "document",
       "source_file": ".claude/settings.json",
+      "source_location": "L1",
+      "community": 7,
+      "community_label": "AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)",
+      "degree": 0
+    },
+    {
+      "id": "file:.claude/settings.local.json",
+      "label": ".claude/settings.local.json",
+      "kind": "file",
+      "file_type": "document",
+      "source_file": ".claude/settings.local.json",
       "source_location": "L1",
       "community": 7,
       "community_label": "AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)",

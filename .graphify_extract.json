@@ -3092,6 +3092,17 @@
       "degree": 0
     },
     {
+      "id": "file:.claude/settings.local.json",
+      "label": ".claude/settings.local.json",
+      "kind": "file",
+      "file_type": "document",
+      "source_file": ".claude/settings.local.json",
+      "source_location": "L1",
+      "community": 7,
+      "community_label": "AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)",
+      "degree": 0
+    },
+    {
       "id": "file:.claude/skills/SKILL.md",
       "label": ".claude/skills/SKILL.md",
       "kind": "file",
