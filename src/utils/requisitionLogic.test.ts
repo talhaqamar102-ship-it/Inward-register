@@ -33,12 +33,17 @@ import {
   buildSuperUserOrderRollups,
   buildOrderTraceability,
   computeOrderReconciliationMetrics,
+  filterProductsByBuyer,
+  getScaleSizeCodes,
+  formatSizeColumnLabel,
   computeActualStageWipPairs,
   evaluateReqReconciliation,
   evaluateOrderReconciliation,
   allocateGrnsToRequisitions,
   migrateLegacyRecordsToRelationalHierarchy,
   executeAtomicWipTransition,
+  parseParentOrderGroupKey,
+  groupOrderRollupsForTree,
   canTransitionOrderStatus,
   canTransitionReqStatus,
   processAlterationCycle,
@@ -49,8 +54,6 @@ import {
   canVoidRequisitionLot,
   canRolePerformAction,
   createAuditTrailEntry,
-  createDemo600PairScenario,
-  replayDemo600PairScenarioStepByStep,
   buildRequisitionAnalyticsSeries,
   getSuperUserStatusBadgeClass,
   renderRequisitionWipAnalyticsChart,
@@ -66,10 +69,17 @@ import {
   getDefaultStationForRole,
   createEmptySizes,
   getStartupRequisitionNumber,
+  formatCurrentDateDDMMYYYY,
+  formatSplitAllocationSummary,
+  buildGrnReceiveConfirmationHtml,
   PendingOrder,
   OrderWipState
 } from './requisitionLogic';
-import { renderSuperUserScreen, SuperUserRenderContext } from '../components/superUserView';
+import { renderSuperUserScreen, renderDashboardVisualGraphs, SuperUserRenderContext } from '../components/superUserView';
+import { renderQcDispatchTab, buildDispatchManifestPrintHtml } from '../components/superUser/qcDispatchTab';
+import { createDemo600PairScenario, replayDemo600PairScenarioStepByStep } from './requisition/demoScenarios';
+import { openStage5BoxingModal } from '../handlers/qcDispatchHandlers';
+import { state } from '../state/appState';
 
 test('R1, 2.8, 3.8, 4.6, 4.7: authoritative size set constant supports standard 7..11 and extended 6..12 plus configurable policy defaults', () => {
   assert.deepEqual(STANDARD_GLOVE_SIZES, ['7', '8', '9', '10', '11']);
@@ -96,6 +106,7 @@ test('1.2: normalizeSuperUserTab redirects legacy tab IDs to canonical views', (
   assert.equal(normalizeSuperUserTab('admin'), 'creation');
   assert.equal(normalizeSuperUserTab('user-management'), 'users');
   assert.equal(normalizeSuperUserTab('analytics'), 'reports');
+  assert.equal(normalizeSuperUserTab('dispatch'), 'qc-dispatch');
 });
 
 test('4.2: determineOrderActiveStage and canExecuteStage5CartonPacking enforce Stage 4 -> Final QC -> Stage 5 lock gate', () => {
@@ -248,11 +259,14 @@ test('1.4 & 9.3: printable slips (GRN, REQ, M-REQ, A-REQ) render 100% monochrome
     mreqNo: 'M-REQ-0001',
     reqNo: 'REQ-0001',
     orderId: 'ORD-2026-001',
+    po: 'PO-27351',
     article: 'Model A9',
     pairs: 300,
     status: 'Issued'
   });
   assert.ok(mreqHtml.includes('M-REQ-0001'));
+  assert.ok(mreqHtml.includes('PO Number:'));
+  assert.ok(mreqHtml.includes('PO-27351'));
   assert.ok(mreqHtml.includes('300'));
 
   const areqHtml = buildAlterationRouteSlipHtml({
@@ -636,6 +650,8 @@ test('4.1, 3.8, 5.4, 10.2, 10.3, 10.4: lifecycle transitions, over-receipt polic
   // 10.4 RBAC
   assert.equal(canRolePerformAction('SUPER_USER', 'ORDER_CREATE'), true);
   assert.equal(canRolePerformAction('INWARD_CLERK', 'ORDER_CREATE'), false);
+  assert.equal(canRolePerformAction('INWARD_CLERK', 'ALTERATION_CYCLE_UPDATE'), true);
+  assert.equal(canRolePerformAction('INWARD_CLERK', 'SCRAP_CONDEMN'), true);
   assert.equal(canRolePerformAction('QC_INSPECTOR', 'FINAL_QC_APPROVE'), true);
 
   // 10.3 Audit entry
@@ -741,12 +757,20 @@ test('R2 & 12.3: zero raw hex colors exist in superUserView.ts and requisitionLo
   assert.ok(mixedScaleChart.includes('role="img"'), 'bars must declare role="img"');
   assert.ok(mixedScaleChart.includes('<table class="sr-only">'), 'chart must expose a screen-reader data table');
 
-  // Verify zero raw hex color codes in superUserView.ts, requisitionLogic.ts, and packingHallView.ts
+  // Verify zero raw hex color codes in superUserView.ts (+ src/components/superUser/*.ts), requisitionLogic.ts (+ src/utils/requisition/*.ts), and packingHallView.ts
   const suViewPath = path.resolve(process.cwd(), 'src/components/superUserView.ts');
+  const suDirPath = path.resolve(process.cwd(), 'src/components/superUser');
   const reqLogicPath = path.resolve(process.cwd(), 'src/utils/requisitionLogic.ts');
+  const reqDirPath = path.resolve(process.cwd(), 'src/utils/requisition');
   const packingViewPath = path.resolve(process.cwd(), 'src/components/packingHallView.ts');
-  const suViewSrc = fs.readFileSync(suViewPath, 'utf8');
-  const reqLogicSrc = fs.readFileSync(reqLogicPath, 'utf8');
+  const suModuleFiles = fs.existsSync(suDirPath)
+    ? fs.readdirSync(suDirPath).filter(f => f.endsWith('.ts')).map(f => fs.readFileSync(path.join(suDirPath, f), 'utf8'))
+    : [];
+  const reqModuleFiles = fs.existsSync(reqDirPath)
+    ? fs.readdirSync(reqDirPath).filter(f => f.endsWith('.ts')).map(f => fs.readFileSync(path.join(reqDirPath, f), 'utf8'))
+    : [];
+  const suViewSrc = [fs.readFileSync(suViewPath, 'utf8'), ...suModuleFiles].join('\n');
+  const reqLogicSrc = [fs.readFileSync(reqLogicPath, 'utf8'), ...reqModuleFiles].join('\n');
   const packingViewSrc = fs.readFileSync(packingViewPath, 'utf8');
 
   const hexRegex = /(?<!&)#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})\b/g;
@@ -1006,6 +1030,15 @@ test('5.1-8.5, 6.6, 9.6, 12.2: Super User 5-view DOM rendering, <150ms Tier-1->T
   assert.ok(usersHtml.includes('<select id="admin-user-station" class="form-select">'));
   assert.ok(usersHtml.includes('<option value="Dock #1">Inward Register (Dock #1)</option>'));
   assert.ok(usersHtml.includes('<option value="Packing Hall #1" selected>Packing Hall</option>'));
+  assert.ok(usersHtml.includes('<option value="SUPER_USER">'));
+  assert.ok(usersHtml.includes('<option value="INWARD_CLERK">'));
+  assert.ok(usersHtml.includes('<option value="PACKING_SUPERVISOR">'));
+  assert.ok(!usersHtml.includes('<option value="QC_INSPECTOR">'));
+  assert.ok(!usersHtml.includes('<option value="ALTERATION_LEAD">'));
+  assert.ok(!usersHtml.includes('<option value="Final QC">'));
+  assert.ok(!usersHtml.includes('<option value="Alteration Bay">'));
+  assert.equal(canRolePerformAction('PACKING_SUPERVISOR', 'STAGE_5_CARTON_SEAL'), false);
+  assert.equal(canRolePerformAction('SUPER_USER', 'STAGE_5_CARTON_SEAL'), true);
   assert.ok(usersHtml.includes('class="su-perm-disclosure"'), 'Users table uses disclosure toggle instead of truncating Authorized Actions');
   assert.equal(getDefaultStationForRole('SUPER_USER'), 'Super User');
   assert.equal(getDefaultStationForRole('INWARD_CLERK'), 'Dock #1');
@@ -1036,8 +1069,12 @@ test('5.1-8.5, 6.6, 9.6, 12.2: Super User 5-view DOM rendering, <150ms Tier-1->T
     assert.ok(!repHtml.includes('Acceptance Criteria'), `${activeReport} removes legacy Acceptance Criteria label`);
   }
 
-  // 9.6 WCAG AA contrast check (>= 4.5:1) for all Super User semantic badge pairs in src/style.css
-  const styleSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/style.css'), 'utf8');
+  // 9.6 WCAG AA contrast check (>= 4.5:1) for all Super User semantic badge pairs in src/style.css (+ src/styles/*.css)
+  const stylesDir = path.resolve(process.cwd(), 'src/styles');
+  const stylePartialFiles = fs.existsSync(stylesDir)
+    ? fs.readdirSync(stylesDir).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(path.join(stylesDir, f), 'utf8'))
+    : [];
+  const styleSrc = [fs.readFileSync(path.resolve(process.cwd(), 'src/style.css'), 'utf8'), ...stylePartialFiles].join('\n');
   assert.ok(styleSrc.includes('BlinkMacSystemFont, "Segoe UI", "Helvetica Neue"'), '9.5 offline system font fallback stack present');
   assert.ok(styleSrc.includes('ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'), '9.5 offline mono font fallback stack present');
 
@@ -1116,7 +1153,16 @@ test('5.1-8.5, 6.6, 9.6, 12.2: Super User 5-view DOM rendering, <150ms Tier-1->T
   assert.match(styleSrc, /\.status-pill-amber\s*\{[^}]*border-style:\s*dashed/s, 'Amber status is distinguishable by shape');
   assert.match(styleSrc, /\.status-pill-red\s*\{[^}]*border:\s*2px solid/s, 'Red status is distinguishable by border weight');
 
-  const mainSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
+  const mainSrc = [
+    'src/main.ts',
+    'src/utils/domModalsAndPrint.ts',
+    'src/components/authView.ts',
+    'src/components/inwardRegisterView.ts',
+    'src/components/repairAndQcViews.ts'
+  ]
+    .filter(rel => fs.existsSync(path.resolve(process.cwd(), rel)))
+    .map(rel => fs.readFileSync(path.resolve(process.cwd(), rel), 'utf8'))
+    .join('\n');
   assert.match(mainSrc, /setAttribute\('role', 'status'\)/, 'Toast content is exposed as a status message');
   assert.match(mainSrc, /role="dialog" aria-modal="true"/, 'Modal declares dialog semantics');
   assert.match(mainSrc, /event\.key === 'Escape'/, 'Modal closes from the Escape key');
@@ -1303,7 +1349,11 @@ test('Final QC readiness & Rolled Throughput Yield helpers handle all edge cases
 
 test('Monochrome Print Guard: @media print and .printable-slip-box contain zero --su-* tokens or non-monochrome hex colors', () => {
   const cssPath = path.resolve(process.cwd(), 'src/style.css');
-  const css = fs.readFileSync(cssPath, 'utf8');
+  const stylesDir = path.resolve(process.cwd(), 'src/styles');
+  const cssPartials = fs.existsSync(stylesDir)
+    ? fs.readdirSync(stylesDir).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(path.join(stylesDir, f), 'utf8'))
+    : [];
+  const css = [fs.readFileSync(cssPath, 'utf8'), ...cssPartials].join('\n');
 
   function extractBlocks(input: string, header: RegExp): string[] {
     const out: string[] = [];
@@ -1680,7 +1730,11 @@ test('Phase 4.3: buildFocusRestoreSelector derives stable escaped selectors for 
 });
 
 test('Phase 4.4: Customer Master and Article/BOM Master forms use responsive CSS grid classes instead of hardcoded inline column ratios', () => {
-  const styleCss = fs.readFileSync(path.join(process.cwd(), 'src', 'style.css'), 'utf8');
+  const stylesDir = path.join(process.cwd(), 'src', 'styles');
+  const stylePartials = fs.existsSync(stylesDir)
+    ? fs.readdirSync(stylesDir).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(path.join(stylesDir, f), 'utf8'))
+    : [];
+  const styleCss = [fs.readFileSync(path.join(process.cwd(), 'src', 'style.css'), 'utf8'), ...stylePartials].join('\n');
   assert.match(styleCss, /\.su-customer-form-grid[\s\S]*grid-template-columns:/);
   assert.match(styleCss, /\.su-article-form-grid[\s\S]*grid-template-columns:/);
 
@@ -1822,4 +1876,640 @@ test('Material Requisition and Stage 4 unlock only stage-by-stage after Stage 3 
     isMaterialRequisitionIssuedForStage4({ ...unlockedForMatReq, mreqStatus: 'Printed' }),
     true
   );
+});
+
+test('Slice 2: Dynamic sizing helpers and Buyer -> Article -> Color -> Sizes Order Creation cascade', () => {
+  assert.equal(calculateSizeTotal({ XS: 60, S: 120, M: 240, L: 300, XL: 180, '2XL': 80 }), 980);
+  assert.deepEqual(createEmptySizes(['2XS', 'XS', 'S']), { '2XS': 0, XS: 0, S: 0 });
+  assert.equal(formatSizeColumnLabel('7', 'LEGACY_7_11'), '7 / S');
+  assert.equal(formatSizeColumnLabel('XS', 'GENRAL'), 'XS');
+
+  const sizeStandards = [
+    { code: 'LEGACY_7_11', rawLabel: 'LEGACY_7_11', sizes: ['7', '8', '9', '10', '11'], isLegacy: true },
+    { code: 'GENRAL', rawLabel: 'GENRAL', sizes: ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'], isLegacy: false },
+    { code: 'IXS MEN', rawLabel: 'IXS MEN', sizes: ['2XS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'], isLegacy: false }
+  ];
+  assert.deepEqual(getScaleSizeCodes(sizeStandards, 'IXS MEN'), ['2XS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL']);
+
+  const customers = [
+    { id: 'BUY-0004', name: 'BERIK' },
+    { id: 'BUY-0020', name: 'OXFORD' }
+  ];
+  const products = [
+    { id: 'CAT-0040', name: 'G-175102-BK 132 RED', customer_id: 'BUY-0004', customer_name: 'BERIK', article_code: 'Zoldar', color_spec: 'Black,Red,White', size_format: 'IXS MEN' },
+    { id: 'CAT-0450', name: 'BRISBANE AIR MS TECH GREY/BLACK', customer_id: 'BUY-0020', customer_name: 'OXFORD', article_code: '', color_spec: 'GREY,Black', size_format: 'GENRAL' }
+  ];
+  const oxfordArticles = filterProductsByBuyer(products, customers, 'OXFORD');
+  assert.equal(oxfordArticles.length, 1);
+  assert.equal(oxfordArticles[0].name, 'BRISBANE AIR MS TECH GREY/BLACK');
+
+  const splitCheck = validateContractorAllocations(
+    { '2XS': 10, XS: 20, S: 0, M: 0, L: 0, XL: 0, '2XL': 0, '3XL': 0, '4XL': 0, '5XL': 0 },
+    [
+      { maker: 'Hall A', sizes: { '2XS': 6, XS: 10 } },
+      { maker: 'Hall B', sizes: { '2XS': 4, XS: 10 } }
+    ],
+    ['2XS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL']
+  );
+  assert.equal(splitCheck.valid, true);
+  assert.equal(splitCheck.totalUnassigned, 0);
+
+  const cascadeHtml = renderSuperUserScreen({
+    activeTab: 'creation',
+    activeReport: 'order_grn_balance',
+    trackingSearch: '',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: {},
+    pendingOrders: [{
+      orderId: 'ORD-2026-999',
+      buyer: 'BERIK',
+      maker: 'Hall A',
+      po: 'PO-999',
+      article: 'G-175102-BK 132 RED',
+      color: 'Black,Red,White',
+      sizeFormat: 'IXS MEN',
+      sizeCodes: ['2XS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'],
+      sizes: { '2XS': 10, XS: 20, S: 0, M: 0, L: 0, XL: 0, '2XL': 0, '3XL': 0, '4XL': 0, '5XL': 0 },
+      totalQty: 30
+    }],
+    dropdownOptions: { makers: ['Hall A'], customers: ['BERIK', 'OXFORD'], articles: products.map(p => p.name), poList: [] },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers,
+      products,
+      sizeStandards,
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: buildSuperUserOrderRollups({ pendingOrders: [], grnList: [], requisitions: [], defectList: [] }),
+    orderDraft: {
+      buyer: 'BERIK',
+      maker: 'Hall A',
+      po: '',
+      article: 'G-175102-BK 132 RED',
+      color: 'Black,Red,White',
+      sizeFormat: 'IXS MEN',
+      dueDate: '',
+      sizes: { '2XS': 10, XS: 20 }
+    }
+  });
+
+  const articleSelectMatch = cascadeHtml.match(/<select id="admin-pending-order-article"[\s\S]*?<\/select>/);
+  assert.ok(articleSelectMatch, 'Renders #admin-pending-order-article select element');
+  const articleSelectHtml = articleSelectMatch[0];
+  assert.ok(articleSelectHtml.includes('G-175102-BK 132 RED'), 'Selected buyer BERIK renders its article');
+  assert.ok(!articleSelectHtml.includes('BRISBANE AIR MS TECH GREY/BLACK'), 'Selecting BERIK excludes OXFORD articles from #admin-pending-order-article');
+  assert.ok(cascadeHtml.includes('Scale: IXS MEN, 10 Sizes'), 'Displays active IXS MEN scale header');
+  assert.ok(cascadeHtml.includes('Catalog colorway: Black,Red,White'), 'Displays combined catalog colorway caption');
+  assert.ok(cascadeHtml.includes('data-size="2XS"'), 'Renders 2XS input for IXS MEN');
+  assert.ok(cascadeHtml.includes('data-size="5XL"'), 'Renders 5XL input for IXS MEN');
+  assert.ok(!cascadeHtml.includes('data-size="7"'), 'Does not render legacy size 7 for IXS MEN');
+});
+
+test('Slice 3: Dynamic multi-scale rollups, monochrome GRN/REQ slips, and WIP analytics preserve catalog sizes', () => {
+  const ixsCodes = ['2XS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'];
+  const ixsSizes = { '2XS': 10, XS: 20, S: 0, M: 30, L: 0, XL: 0, '2XL': 0, '3XL': 0, '4XL': 0, '5XL': 0 };
+
+  // scaleSizeBreakdown preserves non-legacy keys cleanly without leaking 7..11
+  const scaled = scaleSizeBreakdown(ixsSizes, 30);
+  assert.equal(calculateSizeTotal(scaled), 30);
+  assert.equal(scaled['2XS'], 5);
+  assert.equal(scaled.XS, 10);
+  assert.equal(scaled.M, 15);
+  assert.equal(scaled['7'], undefined);
+
+  // Printable GRN & REQ slips render all 10 IXS MEN columns dynamically in monochrome (zero Buyer leakage)
+  const grnSlip = buildGrnReceivingSlipHtml({
+    grnRef: 'GRN-2026-0099',
+    pendingOrderId: 'ORD-2026-099',
+    date: '31-10-2026',
+    maker: 'Hall A',
+    article: 'G-175102-BK 132 RED',
+    color: 'Black,Red,White',
+    receivedFrom: 'Hall A Carrier',
+    rcvdPairs: 60,
+    sizes: ixsSizes,
+    sizeFormat: 'IXS MEN',
+    sizeCodes: ixsCodes
+  });
+  assert.ok(grnSlip.includes('>2XS<'), 'GRN slip renders IXS MEN 2XS column');
+  assert.ok(grnSlip.includes('>5XL<'), 'GRN slip renders IXS MEN 5XL column');
+  assert.ok(grnSlip.includes('30 Prs'), 'GRN slip renders 30 Prs for M');
+  assert.ok(!grnSlip.includes('7 / S'), 'GRN slip does not hardcode legacy 7 / S for IXS MEN');
+  assert.ok(!grnSlip.includes('BERIK'), 'GRN shop-floor slip hides buyer name');
+
+  const reqSlip = buildPackingRequisitionSlipHtml({
+    reqNo: 'REQ-0099',
+    date: '31-10-2026',
+    article: 'G-175102-BK 132 RED',
+    sizes: ixsSizes,
+    totalPairs: 60,
+    issueStatus: 'Issued by Inward Register',
+    sizeFormat: 'IXS MEN',
+    sizeCodes: ixsCodes
+  });
+  assert.ok(reqSlip.includes('>2XS<'), 'REQ slip renders IXS MEN 2XS column');
+  assert.ok(reqSlip.includes('>5XL<'), 'REQ slip renders IXS MEN 5XL column');
+  assert.ok(!reqSlip.includes('7 / S'), 'REQ shop-floor slip does not hardcode legacy 7 / S for IXS MEN');
+
+  // Rollup & WIP analytics chart render non-legacy scales
+  const rollup = buildSuperUserOrderRollups({
+    pendingOrders: [{
+      orderId: 'ORD-2026-099',
+      buyer: 'BERIK',
+      maker: 'Hall A',
+      po: 'PO-IXS',
+      article: 'G-175102-BK 132 RED',
+      color: 'Black,Red,White',
+      sizeFormat: 'IXS MEN',
+      sizeCodes: ixsCodes,
+      sizes: ixsSizes,
+      totalQty: 60
+    }],
+    grnList: [{
+      sr: 1,
+      grnCode: 'GRN-0099',
+      date: '31-10-2026',
+      pendingOrderId: 'ORD-2026-099',
+      maker: 'Hall A',
+      article: 'G-175102-BK 132 RED',
+      rcvdPairs: 60,
+      sizes: ixsSizes,
+      status: 'Received'
+    }],
+    requisitions: [{
+      reqNumber: 'REQ-0099',
+      parentOrderId: 'ORD-2026-099',
+      article: 'G-175102-BK 132 RED',
+      plannedQty: 60,
+      issueStatus: 'Issued by Inward Register',
+      sizeFormat: 'IXS MEN',
+      sizeCodes: ixsCodes,
+      sizes: ixsSizes,
+      stage1In: 60,
+      stage1Passed: 60,
+      stage1Defects: 0,
+      stage2In: 60,
+      stage2Passed: 60,
+      stage2Defects: 0,
+      stage3In: 60,
+      stage3Passed: 60,
+      stage3Defects: 0,
+      mreqNo: 'M-REQ-0099',
+      altReqNo: 'A-REQ-0099',
+      mreqQty: '60 Sets',
+      mreqStatus: 'ISSUED',
+      stage4In: 60,
+      stage4Passed: 60,
+      stage4Pending: 0,
+      stage5Cartons: '2 Cartons (60 Prs)',
+      stage5Pending: '0 Cartons',
+      lineEfficiency: '100.0%',
+      outputPairs: 60,
+      outputCartons: 2,
+      inAlteration: 0,
+      finalQcApproved: true
+    }],
+    defectList: []
+  });
+  assert.equal(rollup.orderRollups[0].sizeFormat, 'IXS MEN');
+  assert.equal(rollup.orderRollups[0].packedSizes.M, 30);
+  assert.equal(rollup.orderRollups[0].packedSizes['7'], undefined);
+
+  const suTrackingHtml = renderSuperUserScreen({
+    activeTab: 'tracking',
+    activeReport: 'order_grn_balance',
+    trackingSearch: '',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: { 'ORD-2026-099': true },
+    pendingOrders: [],
+    dropdownOptions: { makers: ['Hall A'], customers: ['BERIK'], articles: [], poList: [] },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers: [],
+      products: [],
+      sizeStandards: [],
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: rollup
+  });
+  assert.ok(suTrackingHtml.includes('2XS:10'), 'Live tracking displays dynamic Planned Sizes for IXS MEN');
+  assert.ok(!suTrackingHtml.includes('7:0 | 8:0 | 9:0 | 10:0 | 11:0'), 'Live tracking hides legacy 7..11 for IXS MEN');
+});
+
+test('Receiving Hall fixes: live DD-MM-YYYY date, Option B split confirmation popup & slip split summary', () => {
+  const fixedNow = new Date(2026, 10, 18, 9, 30, 0); // 18-11-2026 local
+  assert.equal(formatCurrentDateDDMMYYYY(fixedNow), '18-11-2026');
+
+  const splitSummary = formatSplitAllocationSummary([
+    { maker: 'Hall A', sizes: { '7': 60 }, totalQty: 60 },
+    { maker: 'Hall B', sizes: { '8': 40 }, totalQty: 40 }
+  ]);
+  assert.equal(splitSummary, 'Hall A (60 Prs), Hall B (40 Prs)');
+  assert.equal(formatSplitAllocationSummary([{ maker: 'Hall A', sizes: { '7': 60 }, totalQty: 60 }]), '');
+
+  const confirmHtml = buildGrnReceiveConfirmationHtml({
+    pendingOrderId: 'ORD-2026-105',
+    date: '18-11-2026',
+    splitSummary,
+    batches: [
+      {
+        grnRef: 'GRN-2026-0010',
+        date: '18-11-2026',
+        pendingOrderId: 'ORD-2026-105',
+        maker: 'Hall A',
+        article: 'Model A1',
+        color: 'Black',
+        receivedFrom: 'Tariq Carrier',
+        rcvdPairs: 30,
+        sizes: { '7': 30, '8': 0, '9': 0, '10': 0, '11': 0 }
+      },
+      {
+        grnRef: 'GRN-2026-0011',
+        date: '18-11-2026',
+        pendingOrderId: 'ORD-2026-105',
+        maker: 'Hall B',
+        article: 'Model A1',
+        color: 'Black',
+        receivedFrom: 'Imran Carrier',
+        rcvdPairs: 20,
+        sizes: { '7': 0, '8': 20, '9': 0, '10': 0, '11': 0 }
+      }
+    ]
+  });
+  assert.ok(confirmHtml.includes('data-testid="grn-receive-confirmation"'), 'Renders receive confirmation summary card');
+  assert.ok(confirmHtml.includes('50 Pairs'), 'Shows combined total pairs received');
+  assert.ok(confirmHtml.includes('Tariq Carrier'), 'Shows first received-from carrier');
+  assert.ok(confirmHtml.includes('Imran Carrier'), 'Shows second received-from carrier');
+  assert.ok(confirmHtml.includes('Hall A (60 Prs), Hall B (40 Prs)'), 'Displays all contractors order is split among');
+  assert.ok(confirmHtml.includes('18-11-2026'), 'Shows saved date instead of hardcoded 31-10-2026');
+  assert.ok(confirmHtml.includes('id="doc-preview-container"'), 'Wraps printable slip(s) inside #doc-preview-container for modal Print button');
+});
+
+test('Hall -> Stitcher chain receiving: monochrome GRN slips escape HTML & Live Tracking surfaces stitcher attribution', () => {
+  const slipHtml = buildGrnReceivingSlipHtml({
+    grnRef: 'GRN-2026-0099',
+    date: '19-11-2026',
+    pendingOrderId: 'ORD-2026-888',
+    maker: 'Hall C',
+    hallName: 'Hall C <script>alert(1)</script>',
+    stitcherName: 'Ustad Bilal <img src=x onerror=alert(2)>',
+    receivingNote: 'Courier Note <script>alert(3)</script>',
+    article: 'Model A1',
+    color: 'Black',
+    receivedFrom: 'Ustad Bilal (Hall C)',
+    rcvdPairs: 40,
+    sizes: { '7': 10, '8': 10, '9': 10, '10': 10, '11': 0 }
+  });
+
+  assert.ok(!slipHtml.includes('<script>'), 'Escapes script tags in Hall / Stitcher / Note slip fields');
+  assert.ok(!slipHtml.includes('<img '), 'Escapes raw img tags in Stitcher field');
+  assert.ok(!slipHtml.includes('--su-'), 'GRN slip remains 100% monochrome with zero Super User palette variables');
+  assert.ok(slipHtml.includes('Hall / Stitcher:'), 'Slip prints Hall / Stitcher row');
+  assert.ok(slipHtml.includes('Receiving Note:'), 'Slip prints distinct Receiving Note row when present');
+  assert.ok(slipHtml.includes('&lt;script&gt;alert(1)&lt;/script&gt;'), 'Escaped Hall name renders cleanly');
+
+  const confirmHtml = buildGrnReceiveConfirmationHtml({
+    pendingOrderId: 'ORD-2026-888',
+    date: '19-11-2026',
+    batches: [{
+      grnRef: 'GRN-2026-0099',
+      date: '19-11-2026',
+      pendingOrderId: 'ORD-2026-888',
+      maker: 'Hall C',
+      hallName: 'Hall C',
+      stitcherName: 'Ustad Bilal',
+      receivingNote: 'Gate 2 Delivery',
+      article: 'Model A1',
+      color: 'Black',
+      receivedFrom: 'Gate 2 Delivery',
+      rcvdPairs: 40,
+      sizes: { '7': 10, '8': 10, '9': 10, '10': 10, '11': 0 }
+    }]
+  });
+  assert.ok(confirmHtml.includes('Hall C → Ustad Bilal') || confirmHtml.includes('Hall C &rarr; Ustad Bilal'));
+  assert.ok(confirmHtml.includes('Gate 2 Delivery'));
+
+  const rollup = buildSuperUserOrderRollups({
+    pendingOrders: [{
+      orderId: 'ORD-2026-888',
+      buyer: 'Globex',
+      maker: 'Hall C',
+      po: 'PO-888',
+      article: 'Model A1',
+      color: 'Black',
+      sizes: { '7': 40, '8': 0, '9': 0, '10': 0, '11': 0 },
+      totalQty: 40
+    }],
+    grnList: [{
+      sr: 99,
+      grnCode: 'GRN-2026-0099',
+      date: '19-11-2026',
+      pendingOrderId: 'ORD-2026-888',
+      maker: 'Hall C',
+      hallName: 'Hall C',
+      stitcherName: 'Ustad Bilal',
+      receivedFrom: 'Ustad Bilal (Hall C)',
+      receivingNote: 'Direct Hall Receipt',
+      article: 'Model A1',
+      rcvdPairs: 40,
+      sizes: { '7': 40, '8': 0, '9': 0, '10': 0, '11': 0 },
+      status: 'Received'
+    }],
+    requisitions: [],
+    defectList: []
+  });
+  assert.equal(rollup.orderRollups[0].grnBatches[0].hallName, 'Hall C');
+  assert.equal(rollup.orderRollups[0].grnBatches[0].stitcherName, 'Ustad Bilal');
+  assert.equal(rollup.orderRollups[0].grnBatches[0].receivingNote, 'Direct Hall Receipt');
+
+  const suTrackingHtml = renderSuperUserScreen({
+    activeTab: 'tracking',
+    activeReport: 'order_grn_balance',
+    trackingSearch: 'bilal',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: { 'ORD-2026-888': true },
+    pendingOrders: [],
+    dropdownOptions: {
+      makers: ['Hall C'],
+      customers: ['Globex'],
+      articles: ['Model A1'],
+      poList: ['PO-888'],
+      halls: [{ id: 1, name: 'Hall C', stitchers: [{ id: 10, hallId: 1, name: 'Ustad Bilal' }] }]
+    },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers: [],
+      products: [],
+      sizeStandards: [],
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: rollup
+  });
+  assert.ok(suTrackingHtml.includes('ORD-2026-888'), 'Live Tracking search matches Stitcher name');
+  assert.ok(suTrackingHtml.includes('Hall C &rarr; Ustad Bilal'), 'Live Tracking Supply Stream renders Hall -> Stitcher attribution');
+});
+
+test('Branching Order Tree: groups linked sub-orders (-1, -2) under parent order with clickable M-REQ / A-REQ slip links', () => {
+  const summary = buildSuperUserOrderRollups({
+    pendingOrders: [
+      {
+        orderId: 'ORD-2026-005-1',
+        buyer: 'OXFORD',
+        maker: 'Hall A',
+        po: 'PO-27351',
+        article: 'BRISBANE AIR',
+        color: 'Black',
+        sizes: { '7': 100, '8': 0, '9': 0, '10': 0, '11': 0 },
+        totalQty: 100
+      },
+      {
+        orderId: 'ORD-2026-005-2',
+        buyer: 'OXFORD',
+        maker: 'Hall B',
+        po: 'PO-27351',
+        article: 'AERO TEC',
+        color: 'Red',
+        sizes: { '7': 200, '8': 0, '9': 0, '10': 0, '11': 0 },
+        totalQty: 200
+      }
+    ],
+    grnList: [
+      {
+        sr: 1,
+        grnCode: 'GRN-2026-0001',
+        date: '19-11-2026',
+        pendingOrderId: 'ORD-2026-005-1',
+        maker: 'Hall A',
+        article: 'BRISBANE AIR',
+        rcvdPairs: 60,
+        sizes: { '7': 60, '8': 0, '9': 0, '10': 0, '11': 0 },
+        status: 'Received'
+      }
+    ],
+    requisitions: [
+      {
+        reqNumber: 'REQ-2026-0001',
+        parentOrderId: 'ORD-2026-005-1',
+        allocatedGrnRefs: [{ grnCode: 'GRN-2026-0001', pairs: 60 }],
+        article: 'BRISBANE AIR',
+        po: 'PO-27351',
+        maker: 'Hall A',
+        buyer: 'OXFORD',
+        plannedQty: 40,
+        issueStatus: 'Issued by Inward Register',
+        sizes: { '7': 40, '8': 0, '9': 0, '10': 0, '11': 0 },
+        stage1In: 40,
+        stage1Passed: 40,
+        stage1Defects: 0,
+        stage2In: 40,
+        stage2Passed: 0,
+        stage2Defects: 0,
+        stage3In: 0,
+        stage3Passed: 0,
+        stage3Defects: 0,
+        mreqNo: 'M-REQ-2026-0001',
+        altReqNo: 'A-REQ-2026-0001',
+        mreqQty: '0 Sets',
+        mreqStatus: 'Locked',
+        stage4In: 0,
+        stage4Passed: 0,
+        stage4Pending: 0,
+        stage5Cartons: '0 Cartons',
+        stage5Pending: '0 Cartons',
+        lineEfficiency: '100.0%',
+        outputPairs: 0,
+        outputCartons: 0,
+        inAlteration: 0,
+        scrappedPairs: 0
+      }
+    ],
+    defectList: []
+  });
+
+  const parsed = parseParentOrderGroupKey('ORD-2026-005-2');
+  assert.deepEqual(parsed, { baseOrderId: 'ORD-2026-005', subIndex: 2, isSubOrder: true });
+  assert.deepEqual(parseParentOrderGroupKey('ORD-2026-010'), { baseOrderId: 'ORD-2026-010', subIndex: null, isSubOrder: false });
+
+  const groups = groupOrderRollupsForTree(summary.orderRollups);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].baseOrderId, 'ORD-2026-005');
+  assert.equal(groups[0].isMultiSubOrder, true);
+  assert.equal(groups[0].plannedQty, 300);
+  assert.equal(groups[0].receivedGrnQty, 60);
+  assert.deepEqual(groups[0].orders.map(o => o.orderId), ['ORD-2026-005-1', 'ORD-2026-005-2']);
+
+  const html = renderDashboardVisualGraphs(summary);
+  assert.ok(html.includes('data-testid="su-order-tree-group"'));
+  assert.ok(html.includes('data-base-order="ORD-2026-005"'));
+  assert.ok(html.includes('2 sub-orders'));
+  assert.ok(html.includes('data-sub-order="ORD-2026-005-1"'));
+  assert.ok(html.includes('data-sub-order="ORD-2026-005-2"'));
+  assert.ok(html.includes('data-slip-type="M-REQ" data-ref-code="M-REQ-2026-0001"'));
+  assert.ok(html.includes('data-slip-type="A-REQ" data-ref-code="A-REQ-2026-0001"'));
+});
+
+test('Super User QC & Dispatch tab renders AQL/Release states and monochrome manifest print HTML', () => {
+  const baseCtx: SuperUserRenderContext = {
+    activeTab: 'qc-dispatch',
+    activeReport: 'order_grn_balance',
+    trackingSearch: '',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: {},
+    pendingOrders: [],
+    dropdownOptions: { makers: [], customers: [], articles: [], poList: [] },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers: [],
+      products: [],
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: {
+      totalOrders: 0,
+      totalGrnCount: 0,
+      totalReqCount: 0,
+      totalPlannedPairs: 0,
+      totalReceivedGrnPairs: 0,
+      totalIssuedReqPairs: 0,
+      stage4PackedPairs: 0,
+      stage5PackedPairs: 0,
+      totalInAlterationPairs: 0,
+      totalScrappedPairs: 0,
+      orderRollups: [],
+      reqRollups: [],
+      openDockVariances: 0
+    } as any,
+    qcDispatchSelectedReq: 'REQ-2026-0002',
+    qcDispatchRows: [
+      {
+        reqNumber: 'REQ-2026-0001',
+        orderId: 'ORD-2026-001',
+        article: 'V3-TEST',
+        po: 'PO-1',
+        stage4Passed: 100,
+        finalQcApproved: false,
+        cartons: []
+      },
+      {
+        reqNumber: 'REQ-2026-0002',
+        orderId: 'ORD-2026-002',
+        article: 'V3-READY',
+        po: 'PO-2',
+        stage4Passed: 100,
+        finalQcApproved: true,
+        cartons: [
+          { cartonNo: 'CTN-REQ-2026-0002-001', pairs: 50, dims: '45 × 35 × 30', cbm: 0.0473, shippingMode: 'AIR', sealNo: 'SEAL-1' },
+          { cartonNo: 'CTN-REQ-2026-0002-002', pairs: 50, dims: '60 × 40 × 35', cbm: 0.084, shippingMode: 'SEA', sealNo: 'SEAL-2' }
+        ]
+      }
+    ]
+  };
+
+  const tabHtml = renderQcDispatchTab(baseCtx);
+  assert.ok(tabHtml.includes('id="qcd-order-select"'));
+  assert.ok(tabHtml.includes('id="qcd-req-select"'));
+  assert.ok(tabHtml.includes('id="qcd-bulk-dispatch-bar"'));
+  assert.ok(tabHtml.includes('id="qcd-air-cartons-input"'));
+  assert.ok(tabHtml.includes('id="qcd-sea-cartons-input"'));
+  assert.ok(tabHtml.includes('data-qcd-action="save-air-sea-split"'));
+  assert.ok(tabHtml.includes('Awaiting AQL'));
+  assert.ok(tabHtml.includes('data-qcd-action="aql"'));
+  assert.ok(tabHtml.includes('Ready to release'));
+  assert.match(tabHtml, /<button[^>]*id="qcd-release-btn"[^>]*>/);
+  const releaseBtnTag = tabHtml.match(/<button[^>]*id="qcd-release-btn"[^>]*>/)?.[0] || '';
+  assert.ok(!releaseBtnTag.includes('disabled'));
+
+  const printHtml = buildDispatchManifestPrintHtml(baseCtx.qcDispatchRows![1], '21-11-2026');
+  assert.ok(printHtml.includes('REQ-2026-0002'));
+  assert.ok(!printHtml.includes('--su-'));
+  assert.equal(/#[0-9a-fA-F]{3,6}/.test(printHtml), false);
+});
+
+test('Item 6: openStage5BoxingModal does not open when state.currentUser is null', () => {
+  const prevDocument = (globalThis as any).document;
+  const prevHtmlElement = (globalThis as any).HTMLElement;
+  const prevUser = state.currentUser;
+  const prevWip = { ...state.packingWip };
+  const prevCartons = state.cartons;
+
+  class MockClassList {
+    private set = new Set<string>();
+    add(...tokens: string[]) { tokens.forEach(t => this.set.add(t)); }
+    remove(...tokens: string[]) { tokens.forEach(t => this.set.delete(t)); }
+    contains(token: string) { return this.set.has(token); }
+    toggle(token: string, force?: boolean) {
+      const next = force !== undefined ? force : !this.set.has(token);
+      if (next) this.set.add(token);
+      else this.set.delete(token);
+      return next;
+    }
+  }
+  class MockElement {
+    id = '';
+    className = '';
+    textContent = '';
+    innerHTML = '';
+    style: Record<string, string> = {};
+    attrs: Record<string, string> = {};
+    classList = new MockClassList();
+    setAttribute(k: string, v: string) { this.attrs[k] = v; }
+    append() {}
+    appendChild() {}
+    remove() {}
+    focus() {}
+    addEventListener() {}
+    querySelectorAll() { return []; }
+    querySelector() { return null; }
+    getClientRects() { return []; }
+  }
+
+  const elements = new Map<string, MockElement>();
+  const globalModal = new MockElement();
+  globalModal.id = 'global-modal';
+  elements.set('global-modal', globalModal);
+  for (const id of ['modal-title', 'modal-body', 'modal-btn-print', 'toast-container', 'direct-print-stage']) {
+    const el = new MockElement();
+    el.id = id;
+    elements.set(id, el);
+  }
+
+  (globalThis as any).HTMLElement = MockElement;
+  (globalThis as any).document = {
+    activeElement: null,
+    body: new MockElement(),
+    getElementById(id: string) { return elements.get(id) || null; },
+    createElement() { return new MockElement(); }
+  };
+
+  try {
+    state.currentUser = null;
+    state.cartons = [];
+    state.packingWip = {
+      ...state.packingWip,
+      selectedBatch: 'REQ-2026-0099',
+      stage4Passed: 100,
+      finalQcApproved: true,
+      outputPairs: 0
+    };
+
+    openStage5BoxingModal();
+    assert.equal(globalModal.classList.contains('open'), false, 'Modal must stay closed when currentUser is null');
+  } finally {
+    state.currentUser = prevUser;
+    state.packingWip = prevWip;
+    state.cartons = prevCartons;
+    (globalThis as any).document = prevDocument;
+    (globalThis as any).HTMLElement = prevHtmlElement;
+  }
 });

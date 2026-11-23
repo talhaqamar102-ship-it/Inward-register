@@ -30,13 +30,19 @@ function readSessionToken(req) {
   }
 }
 
-function setSessionCookie(res, token) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+function isHttpsRequest(req) {
+  if (req?.secure) return true;
+  const forwardedProto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return forwardedProto === 'https';
+}
+
+function setSessionCookie(req, res, token) {
+  const secure = isHttpsRequest(req) ? '; Secure' : '';
   res.append('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${SESSION_MAX_AGE_SECONDS}${secure}`);
 }
 
-function clearSessionCookie(res) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+function clearSessionCookie(req, res) {
+  const secure = isHttpsRequest(req) ? '; Secure' : '';
   res.append('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure}`);
 }
 
@@ -50,7 +56,10 @@ function getAllowedRoles(req) {
   const { method, path } = req;
   if (path === '/admin/pending-orders' && method === 'GET') return ['SUPER_USER', 'INWARD_CLERK', 'PACKING_SUPERVISOR'];
   if (path.startsWith('/admin/')) return ['SUPER_USER'];
-  if (path === '/store/dropdowns' || path.startsWith('/store/receivings')) {
+  if (path === '/store/dropdowns' && method === 'GET') {
+    return ['SUPER_USER', 'INWARD_CLERK', 'ALTERATION_LEAD'];
+  }
+  if (path.startsWith('/store/receivings')) {
     if (path.endsWith('/void')) return ['SUPER_USER'];
     return ['SUPER_USER', 'INWARD_CLERK'];
   }
@@ -68,14 +77,17 @@ function getAllowedRoles(req) {
   if (/^\/wip\/[^/]+\/(step[1-5]-[^/]+|material-requisition)$/.test(path)) {
     return ['SUPER_USER', 'PACKING_SUPERVISOR'];
   }
+  if (/^\/wip\/[^/]+\/dispatch$/.test(path)) {
+    return ['SUPER_USER', 'PACKING_SUPERVISOR', 'QC_INSPECTOR'];
+  }
   if (/^\/material-requisitions\/[^/]+\/issue$/.test(path)) {
     return ['SUPER_USER', 'PACKING_SUPERVISOR'];
   }
   if (path === '/material-requisitions' && method === 'GET') {
     return ['SUPER_USER', 'PACKING_SUPERVISOR'];
   }
-  if (path === '/alterations' || /^\/alterations\/[^/]+\/(return|repair)$/.test(path)) {
-    return ['SUPER_USER', 'ALTERATION_LEAD'];
+  if (path === '/alterations' || /^\/alterations\/(?:assign|[^/]+\/(?:return|repair))$/.test(path)) {
+    return ['SUPER_USER', 'ALTERATION_LEAD', 'INWARD_CLERK'];
   }
   if (path === '/materials/return' || /^\/bom\/[^/]+$/.test(path)) {
     return ['SUPER_USER', 'PACKING_SUPERVISOR'];
@@ -83,7 +95,7 @@ function getAllowedRoles(req) {
   if (path === '/qc/aql-calc' || /^\/export\/manifest\/[^/]+$/.test(path)) {
     return ['SUPER_USER', 'PACKING_SUPERVISOR', 'QC_INSPECTOR'];
   }
-  if (path === '/inventory/gloves' || path === '/inventory/materials' || path === '/customers' || path === '/products') {
+  if (path === '/inventory/gloves' || path === '/inventory/materials' || path === '/customers' || path === '/products' || path === '/size-standards') {
     return ['SUPER_USER', 'INWARD_CLERK', 'PACKING_SUPERVISOR', 'QC_INSPECTOR', 'ALTERATION_LEAD'];
   }
   return [];
@@ -102,7 +114,7 @@ apiRouter.get('/auth/status', handle(req => ({
 apiRouter.post('/auth/bootstrap', handle((req, res) => {
   const user = AuthService.createInitialSuperUser(req.body || {});
   const session = AuthService.createSession(user.userId);
-  setSessionCookie(res, session.token);
+  setSessionCookie(req, res, session.token);
   return { user };
 }));
 
@@ -110,13 +122,13 @@ apiRouter.post('/auth/login', handle((req, res) => {
   const user = AuthService.verifyCredentials(req.body?.username, req.body?.password);
   if (!user) throw authError('Username or password is incorrect.', 401);
   const session = AuthService.createSession(user.userId);
-  setSessionCookie(res, session.token);
+  setSessionCookie(req, res, session.token);
   return { user };
 }));
 
 apiRouter.post('/auth/logout', handle((req, res) => {
   AuthService.destroySession(readSessionToken(req));
-  clearSessionCookie(res);
+  clearSessionCookie(req, res);
   return { loggedOut: true };
 }));
 
@@ -140,6 +152,7 @@ apiRouter.get('/inventory/gloves', handle(() => PackingService.getGloveInventory
 apiRouter.get('/inventory/materials', handle(() => PackingService.getMaterialInventory()));
 apiRouter.get('/customers', handle(() => PackingService.getCustomers()));
 apiRouter.get('/products', handle((req) => PackingService.getProducts(req.query.customerId)));
+apiRouter.get('/size-standards', handle(() => PackingService.getSizeStandards()));
 
 // --- GLOVE REQUISITIONS ---
 apiRouter.get('/requisitions', handle(() => PackingService.getRequisitions()));
@@ -223,23 +236,44 @@ apiRouter.post('/wip/:reqNo/step4-packing', handle((req) => {
 }));
 
 apiRouter.post('/wip/:reqNo/step5-cartons', handle((req) => {
-  const { pairsPerCarton, enforcePreStage5AqlGate } = req.body;
+  const { pairsPerCarton, pairsToPack, dimensionsCm, shippingMode, sealPrefix, enforcePreStage5AqlGate } = req.body || {};
   return PackingService.executeStep5SecondPacking(
     req.params.reqNo,
     pairsPerCarton ? Number(pairsPerCarton) : null,
-    { enforcePreStage5AqlGate: Boolean(enforcePreStage5AqlGate) }
+    {
+      enforcePreStage5AqlGate: Boolean(enforcePreStage5AqlGate),
+      pairsToPack: pairsToPack != null ? Number(pairsToPack) : null,
+      dimensionsCm,
+      shippingMode,
+      sealPrefix
+    }
   );
 }));
 
 apiRouter.post('/wip/:reqNo/step5-cartons-gated', handle((req) => {
   const { role } = getActorMeta(req, 'PACKING_SUPERVISOR');
   PackingService.enforceRolePermission(role, 'STAGE_5_CARTON_SEAL');
-  const { pairsPerCarton } = req.body;
+  const { pairsPerCarton, pairsToPack, dimensionsCm, shippingMode, sealPrefix } = req.body || {};
   return PackingService.executeStep5SecondPacking(
     req.params.reqNo,
     pairsPerCarton ? Number(pairsPerCarton) : null,
-    { enforcePreStage5AqlGate: true }
+    {
+      enforcePreStage5AqlGate: true,
+      pairsToPack: pairsToPack != null ? Number(pairsToPack) : null,
+      dimensionsCm,
+      shippingMode,
+      sealPrefix
+    }
   );
+}));
+
+apiRouter.post('/wip/:reqNo/dispatch', handle((req) => {
+  const { actor, role } = getActorMeta(req);
+  const allowed = req.body?.release ? ['SUPER_USER'] : ['SUPER_USER', 'PACKING_SUPERVISOR', 'QC_INSPECTOR'];
+  if (!allowed.includes(role)) {
+    throw Object.assign(new Error('Forbidden: insufficient role permissions for carton dispatch.'), { statusCode: 403 });
+  }
+  return PackingService.dispatchCartons(req.params.reqNo, { ...(req.body || {}), actor, role });
 }));
 
 // --- FINAL QC INSPECTION ---
@@ -299,9 +333,25 @@ apiRouter.post('/materials/return', handle((req) => {
 }));
 
 // --- ALTERATION REWORK ATTRIBUTION (TAILOR & MAX 2-REWORK SCRAP) ---
+apiRouter.post('/alterations/assign', handle((req) => {
+  const { reqNumber, tailorName, alterationId, pairsCount } = req.body || {};
+  return PackingService.assignAlterationTailor(
+    reqNumber,
+    tailorName,
+    alterationId,
+    pairsCount != null ? Number(pairsCount) : null
+  );
+}));
+
 apiRouter.post('/alterations/:id/repair', handle((req) => {
-  const { tailorName, isScrap, deductionRate } = req.body;
-  return PackingService.completeAlterationRepair(Number(req.params.id), tailorName, Boolean(isScrap), deductionRate);
+  const { tailorName, isScrap, deductionRate, pairsCount } = req.body || {};
+  return PackingService.completeAlterationRepair(
+    Number(req.params.id),
+    tailorName,
+    Boolean(isScrap),
+    deductionRate,
+    pairsCount != null ? Number(pairsCount) : null
+  );
 }));
 
 // --- AQL 1.5 AUDIT & EXPORT MANIFEST ---
@@ -322,8 +372,11 @@ apiRouter.get('/export/manifest/:reqNo', handle((req) => {
 }));
 
 // --- SUPER USER ADMIN ENDPOINTS ---
-apiRouter.get('/admin/overview', handle(() => {
-  return PackingService.getAdminOverview();
+apiRouter.get('/admin/overview', handle((req) => {
+  return PackingService.getAdminOverview({
+    includeCatalog: req.query?.includeCatalog !== '0',
+    fullIntegrityCheck: req.query?.fullIntegrity === '1'
+  });
 }));
 
 apiRouter.get('/admin/users', handle(() => AuthService.listUsers()));
@@ -394,6 +447,16 @@ apiRouter.post('/admin/pending-orders', handle((req) => {
   return PackingService.createPendingOrderAdmin(req.body, actor, role);
 }));
 
+apiRouter.put('/admin/pending-orders/:orderId', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  const { adminPassword, ...orderPayload } = req.body || {};
+  AuthService.verifyAdminPassword(req.authUser.userId, adminPassword, {
+    actionLabel: 'order changes',
+    failureMessage: 'Incorrect Admin password. Order changes were not saved.'
+  });
+  return PackingService.updatePendingOrderAdmin(req.params.orderId, orderPayload, actor, role);
+}));
+
 apiRouter.post('/admin/pending-orders/:orderId/short-close', handle((req) => {
   const { actor, role } = getActorMeta(req, 'SUPER_USER');
   return PackingService.shortClosePendingOrder(req.params.orderId, req.body?.reason, actor, role);
@@ -402,6 +465,30 @@ apiRouter.post('/admin/pending-orders/:orderId/short-close', handle((req) => {
 apiRouter.delete('/admin/pending-orders/:orderId', handle((req) => {
   const { actor, role } = getActorMeta(req);
   return PackingService.deletePendingOrderAdmin(req.params.orderId, actor, role);
+}));
+
+apiRouter.get('/admin/halls', handle(() => {
+  return PackingService.getHallsWithStitchers();
+}));
+
+apiRouter.post('/admin/halls', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  return PackingService.createHallAdmin(req.body?.name, actor, role);
+}));
+
+apiRouter.delete('/admin/halls/:id', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  return PackingService.deleteHallAdmin(req.params.id, actor, role);
+}));
+
+apiRouter.post('/admin/halls/:id/stitchers', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  return PackingService.createStitcherAdmin(req.params.id, req.body?.name, actor, role);
+}));
+
+apiRouter.delete('/admin/stitchers/:id', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  return PackingService.deleteStitcherAdmin(req.params.id, actor, role);
 }));
 
 apiRouter.post('/admin/db/backup', handle(() => {

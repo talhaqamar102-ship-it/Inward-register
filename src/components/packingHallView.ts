@@ -9,7 +9,8 @@ import {
   isStage3ClearedForMaterialReq,
   isStage5ReadyForCartons,
   normalizeBaseReqNumber,
-  renderRequisitionWipAnalyticsChart
+  renderRequisitionWipAnalyticsChart,
+  formatCurrentDateDDMMYYYY
 } from '../utils/requisitionLogic';
 
 export type RollupSummaryParam = Parameters<typeof buildRequisitionAnalyticsSeries>[0];
@@ -26,6 +27,9 @@ export interface PackingHallCartonRow {
   cartonNo: string;
   pairs: number;
   grossWt: string;
+  dims?: string;
+  cbm?: number;
+  shippingMode?: 'UNASSIGNED' | 'AIR' | 'SEA';
   status: string;
   barcodeVerified: boolean;
   sealNo: string;
@@ -49,8 +53,10 @@ export interface PackingHallViewParams {
   cartons: PackingHallCartonRow[];
   rollupSummary: RollupSummaryParam;
   getOrderAvailableDockPairs: (orderId: string) => number;
+  getOrderUnclaimedDockPairs?: (orderId: string) => number;
   remainingStagePairs: (input: number, passed: number, defects: number) => number;
   escapeHtml: (value: string) => string;
+  isSuperUser?: boolean;
   isInitialSyncing?: boolean;
   isManualSync?: boolean;
   syncError?: string;
@@ -67,12 +73,17 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
     cartons,
     rollupSummary,
     getOrderAvailableDockPairs,
+    getOrderUnclaimedDockPairs,
     remainingStagePairs,
     escapeHtml,
+    isSuperUser = true,
     isInitialSyncing = false,
     isManualSync = false,
     syncError = ''
   } = params;
+
+  const getUnclaimed = getOrderUnclaimedDockPairs || getOrderAvailableDockPairs;
+  const dockReadyOrders = pendingOrders.filter(o => !o.shortClosed && getUnclaimed(o.orderId) > 0);
 
   const baseReq = normalizeBaseReqNumber(wip.selectedBatch);
   const aReq = getAlterationReqNumber(baseReq);
@@ -94,7 +105,7 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
         Packing Hall Floor &mdash; 5-Stage WIP Flow &amp; Requisition Slip Generator
       </h1>
       <div class="sub-header-right">
-        <span class="system-date-label">Date: 31-10-2026</span>
+        <span class="system-date-label">Date: ${formatCurrentDateDDMMYYYY()}</span>
       </div>
     </div>
 
@@ -140,12 +151,14 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
                     : stage === 'STEP_5' ? 'Stage 5 (Cartons)'
                     : 'Completed';
                   const label = isEmptyPlaceholder
-                    ? 'No active requisition — choose a master order below'
+                    ? (dockReadyOrders.length > 0
+                        ? 'No active requisition — choose ready dock stock below'
+                        : 'No active requisition — awaiting Inward dock receiving')
                     : `${r}${art ? ` — ${art}` : ''} [${stageLabel}]`;
                   return `<option value="${escapeHtml(r)}" ${r === baseReq ? 'selected' : ''}>${escapeHtml(label)}</option>`;
-                }).join('') + (pendingOrders.length > 0
-                  ? `<optgroup label="Master Orders — create requisition">${pendingOrders.map(order =>
-                    `<option value="ORDER:${escapeHtml(order.orderId)}">Load ${escapeHtml(order.orderId)} — ${escapeHtml(order.article)} (${Number(order.totalQty || 0).toLocaleString()} pairs)</option>`
+                }).join('') + (dockReadyOrders.length > 0
+                  ? `<optgroup label="Dock Stock Ready — create requisition">${dockReadyOrders.map(order =>
+                    `<option value="ORDER:${escapeHtml(order.orderId)}">Load ${escapeHtml(order.orderId)} — ${escapeHtml(order.article)} (${getUnclaimed(order.orderId).toLocaleString()} pairs available)</option>`
                   ).join('')}</optgroup>`
                   : '');
               })()}
@@ -174,7 +187,7 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
           </div>
           ` : ''}
           <div class="packing-toolbar-actions">
-            <button type="button" class="btn-primary" id="btn-wip-new-req" ${pendingOrders.length === 0 ? 'disabled title="A pending master order is needed first."' : ''}>+ Generate Requisition</button>
+            <button type="button" class="btn-primary" id="btn-wip-new-req" ${dockReadyOrders.length === 0 ? 'disabled title="No unclaimed Inward Register stock available yet."' : ''}>+ Generate Requisition</button>
           </div>
         </div>
       </section>
@@ -198,9 +211,11 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
           <div class="packing-qc-notice" data-testid="wip-awaiting-qc-banner">
             <div>
               <strong>Stage 4 Complete &mdash; Awaiting Final QC (AQL 1.5 Inspection):</strong>
-              All <strong>${wip.stage4Passed.toLocaleString()}</strong> pairs in <strong>${baseReq}</strong> are polybagged. Complete Final Inspection &amp; Master Carton Clearance before sealing cartons in Stage 5.
+              All <strong>${wip.stage4Passed.toLocaleString()}</strong> pairs in <strong>${baseReq}</strong> are polybagged. Complete Final Inspection &amp; Master Carton Clearance in Super User QC &amp; Dispatch before sealing cartons in Stage 5.
             </div>
-            <button type="button" class="btn-primary" id="btn-wip-open-qc-banner">Go to Final Inspection &rarr;</button>
+            ${isSuperUser
+              ? `<button type="button" class="btn-primary" id="btn-wip-open-qc-banner">Open Super User QC &amp; Dispatch &rarr;</button>`
+              : `<span class="status-pill">Queued for Super User QC &amp; Dispatch</span>`}
           </div>
         ` : ''}
 
@@ -311,8 +326,8 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
               <div class="pipeline-stage-metric"><span>Packed:</span> <strong id="wip-stg5-cartons">${wip.stage5Cartons || '0 Cartons (0 Prs)'}</strong></div>
               <div class="pipeline-stage-metric"><span>Pending:</span> <strong>${wip.stage5Pending || '0 Cartons'}</strong></div>
             </div>
-            <button type="button" class="${activeStage === 'STEP_5' ? 'btn-primary' : 'btn-outline'}" style="width: 100%; margin-top: 10px; font-size: 12px; padding: 6px; justify-content: center;" id="btn-wip-step5">
-              Box &amp; Seal Cartons
+            <button type="button" class="${activeStage === 'STEP_5' ? 'btn-primary' : 'btn-outline'}" style="width: 100%; margin-top: 10px; font-size: 12px; padding: 6px; justify-content: center;" id="btn-wip-step5"${isSuperUser ? '' : ' disabled'}>
+              ${isSuperUser ? 'Box &amp; Seal Cartons' : 'Super User Only (QC &amp; Dispatch)'}
             </button>
           </div>
         </div>
@@ -326,6 +341,8 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
         return renderRequisitionWipAnalyticsChart({
           series,
           activeWipSizes: wip.sizes,
+          activeSizeFormat: (wip as any).sizeFormat,
+          activeSizeCodes: (wip as any).sizeCodes,
           activeReqNumber: baseReq,
           activePlannedQty: wip.plannedQty,
           activeStage4Packed: wip.stage4Passed,
@@ -384,18 +401,20 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
         <div class="panel-card">
           <div class="panel-card-header">
             <h2 class="panel-card-title" style="margin: 0;">Master Shipping Carton Manifest</h2>
-            <span class="panel-counter-badge">${cartons.length} Cartons</span>
+            <span class="panel-counter-badge" style="font-variant-numeric: tabular-nums;">
+              ${cartons.length} Cartons &bull; ${cartons.reduce((s, c) => s + Number(c.cbm ?? 0.084), 0).toFixed(3)} CBM
+            </span>
           </div>
           <div class="table-responsive">
             <table class="data-table">
               <thead>
                 <tr>
                   <th scope="col">Carton #</th>
-                  <th scope="col" class="text-right">Net Pairs</th>
-                  <th scope="col" class="text-right">Gross Wt</th>
-                  <th scope="col" class="text-center">QC Status</th>
-                  <th scope="col" class="text-center">Barcode</th>
-                  <th scope="col">QC Seal #</th>
+                  <th scope="col" class="text-right">Pairs</th>
+                  <th scope="col">Size (cm)</th>
+                  <th scope="col" class="text-right">CBM</th>
+                  <th scope="col" class="text-center">Mode</th>
+                  <th scope="col" class="text-center">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -403,16 +422,27 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
                   <tr>
                     <td colspan="6" class="table-empty-cell">No cartons logged in manifest.</td>
                   </tr>
-                ` : cartons.slice(0, 5).map(c => `
+                ` : cartons.slice(0, 5).map(c => {
+                  const mode = String(c.shippingMode || 'UNASSIGNED').toUpperCase();
+                  const modeLabel = mode === 'AIR' ? 'AIR' : mode === 'SEA' ? 'SEA' : 'Ready';
+                  const modeClass = mode === 'AIR' || mode === 'SEA' ? 'status-pill status-pill-green' : 'status-pill';
+                  return `
                   <tr>
-                    <td><strong>${c.cartonNo}</strong></td>
-                    <td class="text-right">${c.pairs}</td>
-                    <td class="text-right">${c.grossWt}</td>
-                    <td class="text-center"><span class="status-pill">${c.status}</span></td>
-                    <td class="text-center" style="font-weight: 600;">${c.barcodeVerified ? 'Verified' : 'Pending'}</td>
-                    <td style="font-family: monospace; font-size: 11.5px;">${c.sealNo}</td>
+                    <td><strong>${escapeHtml(c.cartonNo)}</strong></td>
+                    <td class="text-right" style="font-variant-numeric: tabular-nums;">${c.pairs}</td>
+                    <td style="font-variant-numeric: tabular-nums; font-size: 12px;">${escapeHtml(c.dims || '60 × 40 × 35')}</td>
+                    <td class="text-right" style="font-variant-numeric: tabular-nums;">${Number(c.cbm ?? 0.084).toFixed(3)}</td>
+                    <td class="text-center"><span class="${modeClass}">${modeLabel}</span></td>
+                    <td class="text-center" style="white-space: nowrap;">
+                      ${mode === 'UNASSIGNED' ? `
+                        <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-carton-dispatch-mode="AIR" data-carton-no="${escapeHtml(c.cartonNo)}">Air</button>
+                        <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-carton-dispatch-mode="SEA" data-carton-no="${escapeHtml(c.cartonNo)}">Sea</button>
+                      ` : `
+                        <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-carton-dispatch-mode="UNASSIGNED" data-carton-no="${escapeHtml(c.cartonNo)}">Reset</button>
+                      `}
+                    </td>
                   </tr>
-                `).join('') + (cartons.length > 5 ? `
+                `;}).join('') + (cartons.length > 5 ? `
                   <tr>
                     <td colspan="6" class="table-empty-cell" style="padding: 8px 12px; font-size: 11.5px;">
                       Showing 5 of ${cartons.length} sealed cartons (+${cartons.length - 5} more in manifest).
@@ -432,12 +462,14 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
           <span class="stat-divider">&bull;</span>
           <span>Output: <strong>${wip.outputPairs} Pairs / ${wip.outputCartons} Cartons</strong></span>
           <span class="stat-divider">&bull;</span>
-          <span>In Alteration: <strong>${wip.inAlteration} Pairs</strong></span>
+          <span>Volume: <strong style="font-variant-numeric: tabular-nums;">${cartons.reduce((s, c) => s + Number(c.cbm ?? 0.084), 0).toFixed(3)} CBM</strong></span>
+          <span class="stat-divider">&bull;</span>
+          <span>Split: <strong>Air ${cartons.filter(c => c.shippingMode === 'AIR').reduce((s, c) => s + Number(c.pairs || 0), 0)} / Sea ${cartons.filter(c => c.shippingMode === 'SEA').reduce((s, c) => s + Number(c.pairs || 0), 0)} prs</strong></span>
         </div>
         <div class="footer-actions-right">
           <button class="btn-outline" id="btn-wip-export-shift">Export Shift Log</button>
           <button class="btn-outline" id="btn-wip-print-labels">Print Carton Labels</button>
-          <button class="btn-primary" id="btn-wip-final-clearance">Final Dispatch Clearance</button>
+          ${isSuperUser ? `<button class="btn-primary" id="btn-wip-final-clearance">QC &amp; Dispatch (Super User)</button>` : ''}
         </div>
       </footer>
     </main>

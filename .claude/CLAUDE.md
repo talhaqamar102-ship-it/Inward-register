@@ -17,11 +17,11 @@ SQLite via node:sqlite (`data/gloves_packing.db`), Docker runtime
   fake receivings, defects, or cartons. Reference masters (customers,
   products, materials, BOM) may be seeded as before.
 - **Print engine.** Slips print through `#direct-print-stage` +
-  `body.printing-slip` + native `window.print()` (defined in `src/main.ts`,
-  mirrored in `src/App.tsx`). Keep `@media print` rules in `src/style.css`.
+  `body.printing-slip` + native `window.print()` (defined in `src/main.ts`).
+  Keep `@media print` rules in `src/style.css`.
 - **Entry point.** `index.html` loads `/src/main.ts` (vanilla 5-screen app:
-  grn, packing, repair, qc, admin). `src/App.tsx`/`main.tsx` is the React
-  harness kept out of the served entry; do not switch entries without intent.
+  grn, packing, repair, qc, admin). There is no React harness in this
+  checkout; do not add a second entry without intent.
 - **Docker parity.** `docker compose build` must succeed and the container
   must pass `/health` before a task is considered done.
 
@@ -44,8 +44,8 @@ SQLite via node:sqlite (`data/gloves_packing.db`), Docker runtime
 ## Graphify Knowledge Graph Harness (`/graphify`)
 
 This project maintains a persistent whole-project knowledge graph in `graphify-out/` (`graph.json`, `GRAPH_REPORT.md`, `wiki/index.md`, `graph.html`), powered by `.claude/skills/graphify/SKILL.md` and `scripts/graphify.ts`:
-1. **Read Before Edit**: Consult `graphify-out/GRAPH_REPORT.md`, `graphify-out/wiki/index.md`, or run `npm run graphify:query -- "<question>"` (`graphify query "<question>"`) before reading raw files.
-2. **Mandatory Post-Change Update**: Every time code or schema files are modified, the `PostToolUse` (`Edit|Write`) hook and quality gate automatically run `graphify update .` (`npm run graphify`) so `graphify-out/graph.json` and `graphify-out/GRAPH_REPORT.md` stay synchronized with the latest AST and SQLite schema.
+1. **Read Before Edit**: Consult `graphify-out/GRAPH_REPORT.md`, `graphify-out/wiki/index.md`, or run `npm run graphify:query -- "<question>"` (`npx tsx scripts/graphify.ts query "<question>"`) before reading raw files. The bare `graphify` binary is not on PATH here; always use the project script.
+2. **Mandatory Post-Change Update**: Every time code or schema files are modified, the `PostToolUse` (`Edit|Write`) hook and quality gate automatically run `npx tsx scripts/graphify.ts update .` (`npm run graphify`) so `graphify-out/graph.json` and `graphify-out/GRAPH_REPORT.md` stay synchronized with the latest AST and SQLite schema.
 
 ## unslop Design Craft Harness
 
@@ -55,11 +55,12 @@ Installed locally at `.agents/skills/unslop/SKILL.md` (`heydamir/unslop`, `CC BY
 
 ## Workflow
 
-Use the dev-team plugin from https://github.com/bdfinst/agentic-dev-team
-(vendored at `.agentic-dev-team/`, catalog in `skills.md`):
+The dev-team `/specs → /plan → /build → /pr` workflow
+(https://github.com/bdfinst/agentic-dev-team) is **not installed in this
+checkout**: `.agentic-dev-team/` is absent, `skills.md` is absent, and the
+plugin's hooks are not configured in `.claude/settings.json`. Do not invoke or
+promise `/specs`, `/plan`, `/build`, or `/pr` unless the harness is restored.
 
-    /specs  →  /plan  →  /build  →  /pr
-
-Human gates sit between /specs→/plan and /plan→/build. Bug fixes may start at
-/plan or go straight to implementation. Run /code-review before every commit.
+Work on a feature branch, run the quality gates above before reporting done, and
+run `/code-review` before every commit.
 

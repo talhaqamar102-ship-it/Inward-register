@@ -36,25 +36,27 @@ Packaging & cobalting execution system for safety-glove manufacturing.
 
 ## Development workflow
 
-This project uses the **dev-team** plugin from
-https://github.com/bdfinst/agentic-dev-team — vendored in
-`.agentic-dev-team/plugins/dev-team/`, cataloged in `skills.md`:
+The **dev-team** plugin (`/specs → /plan → /build → /pr`) from
+https://github.com/bdfinst/agentic-dev-team is **not installed in this
+checkout**. `.agentic-dev-team/` does not exist and `skills.md` is absent; the
+plugin's hooks were removed from `.claude/settings.json` after failing with exit
+127 on every tool call. Do not follow or promise the dev-team workflow unless
+the harness is restored (clone upstream into `.agentic-dev-team/`).
 
-    /specs → /plan → /build → /pr
-
-Human gates between /specs→/plan and /plan→/build. `/code-review` before every
-commit. See `.claude/CLAUDE.md` for the full project constitution
-(grayscale gate, clean-mode gate, quality gates).
+Work on a feature branch and run `/code-review` before every commit. See
+`.claude/CLAUDE.md` for the full project constitution (grayscale gate,
+clean-mode gate, quality gates).
 
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
 
 Rules:
-- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- The `graphify` binary is **not on PATH** in this environment; always invoke the project script: `npx tsx scripts/graphify.ts <command>` (or the `npm run graphify*` aliases).
+- When graphify-out/graph.json exists, run `npx tsx scripts/graphify.ts query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `npx tsx scripts/graphify.ts path "<A>" "<B>"` for relationships and `npx tsx scripts/graphify.ts explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- After modifying code, run `npx tsx scripts/graphify.ts update .` (`npm run graphify`) to keep the graph current (AST-only, no API cost).
 - A committed graphify-out/graph.json is rewritten whole on every build, so a large diff to it in a pull request is expected. Do not flag it as churn or suggest skipping the graph rebuild or its hooks.
 
 ## unslop Design Craft Harness

@@ -152,4 +152,64 @@ describe('Gloves Packing Execution System - End-to-End Test Suite', () => {
     assert.equal(passResult.wip.current_step, 'DISPATCH_APPROVED');
     assert.equal(passResult.status, 'DISPATCHED');
   });
+
+  test('13. Step 5 Partial Split Boxing (AIR vs SEA, Custom Dimensions & Real CBM)', () => {
+    // Re-pack fresh using partial boxing: 100 pairs in 45x35x30 (50/ctn -> 2 cartons) via AIR
+    db.prepare(`DELETE FROM cartons WHERE req_number = ?`).run(reqNumber);
+    db.prepare(`UPDATE packing_wip SET step5_cartons_packed = 0, step5_pairs_packed = 0 WHERE req_number = ?`).run(reqNumber);
+    db.prepare(`UPDATE glove_requisitions SET status = 'IN_PROGRESS' WHERE req_number = ?`).run(reqNumber);
+
+    const airBatch = PackingService.executeStep5SecondPacking(reqNumber, 50, {
+      enforcePreStage5AqlGate: true,
+      pairsToPack: 100,
+      dimensionsCm: '45x35x30',
+      shippingMode: 'AIR',
+      sealPrefix: 'AIR-SEAL'
+    });
+    assert.equal(airBatch.wip.step5_cartons_packed, 2);
+    assert.equal(airBatch.wip.step5_pairs_packed, 100);
+    assert.equal(airBatch.cartons.length, 2);
+    assert.equal(airBatch.cartons[0].dimensions_cm, '45x35x30');
+    assert.equal(airBatch.cartons[0].shipping_mode, 'AIR');
+    assert.ok(Math.abs(airBatch.cartons[0].cbm - 0.0473) < 0.0005);
+
+    // Box remaining 80 pairs in 60x40x35 (40/ctn -> 2 cartons) as UNASSIGNED
+    const seaBatch = PackingService.executeStep5SecondPacking(reqNumber, 40, {
+      enforcePreStage5AqlGate: true,
+      pairsToPack: 80,
+      dimensionsCm: '60x40x35',
+      shippingMode: 'UNASSIGNED',
+      sealPrefix: 'SEA-SEAL'
+    });
+    assert.equal(seaBatch.wip.step5_cartons_packed, 4);
+    assert.equal(seaBatch.wip.step5_pairs_packed, 180);
+
+    // Reject over-boxing beyond step4_packing_good
+    assert.throws(() => {
+      PackingService.executeStep5SecondPacking(reqNumber, 10, {
+        enforcePreStage5AqlGate: true,
+        pairsToPack: 10
+      });
+    }, /Cannot box 10 pairs; only 0 pairs remain unboxed/);
+
+    // Dispatch remaining 2 UNASSIGNED cartons via SEA
+    const remainingBarcodes = seaBatch.cartons
+      .filter(c => c.shipping_mode === 'UNASSIGNED')
+      .map(c => c.carton_barcode);
+    PackingService.dispatchCartons(reqNumber, {
+      shippingMode: 'SEA',
+      cartonBarcodes: remainingBarcodes
+    });
+
+    const manifest = PackingService.getMasterCartonManifest(reqNumber);
+    assert.equal(manifest.totalCartons, 4);
+    assert.equal(manifest.totalPairs, 180);
+    assert.equal(manifest.airCartons, 2);
+    assert.equal(manifest.airPairs, 100);
+    assert.equal(manifest.seaCartons, 2);
+    assert.equal(manifest.seaPairs, 80);
+    assert.equal(manifest.unshippedCartons, 0);
+    // 2 * 0.0473 + 2 * 0.084 = 0.2626 -> '0.263'
+    assert.equal(manifest.totalCBM, '0.263');
+  });
 });

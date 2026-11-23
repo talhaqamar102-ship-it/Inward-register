@@ -1,12 +1,28 @@
+import { randomUUID } from 'node:crypto';
 import { db, backupDatabase, initDatabase } from '../db.js';
 import { AQLService } from './aqlService.js';
-import { createPendingOrder, deletePendingOrder } from './orderService.js';
+import { createPendingOrder, createPendingOrderBatch, updatePendingOrder, deletePendingOrder } from './orderService.js';
 
 const REQUISITION_SIZES = ['7', '8', '9', '10', '11'];
 
-function parseRequisitionSizes(value) {
+function getScaleCodesForFormat(sizeFormat = 'LEGACY_7_11') {
+  const normalized = String(sizeFormat || '').trim() || 'LEGACY_7_11';
+  if (normalized === 'LEGACY_7_11') return [...REQUISITION_SIZES];
+  try {
+    const row = db.prepare(`SELECT sizes_json FROM size_standards WHERE code = ?`).get(normalized);
+    if (row?.sizes_json) {
+      const parsed = JSON.parse(row.sizes_json);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed.map(String);
+    }
+  } catch {
+    // Fall back to legacy array only if size_standards has not been initialized yet.
+  }
+  return [...REQUISITION_SIZES];
+}
+
+function parseRequisitionSizes(value, allowedSizes = REQUISITION_SIZES) {
   const parsed = JSON.parse(value || '{}');
-  return Object.fromEntries(REQUISITION_SIZES.map(size => [size, Number(parsed[size] || 0)]));
+  return Object.fromEntries(allowedSizes.map(size => [size, Number(parsed[size] || 0)]));
 }
 
 function runAtomicWipStep(fn) {
@@ -33,6 +49,19 @@ function runAtomicWipStep(fn) {
   }
 }
 
+const httpErr = (msg, statusCode = 409) => Object.assign(new Error(msg), { statusCode });
+
+const wholeCount = (v, label) => {
+  if (typeof v === 'string' && v.trim() === '') {
+    throw httpErr(`${label} must be a whole number >= 0.`, 400);
+  }
+  const n = Number(v ?? 0);
+  if (!Number.isInteger(n) || n < 0) {
+    throw httpErr(`${label} must be a whole number >= 0.`, 400);
+  }
+  return n;
+};
+
 export class PackingService {
   // --- INVENTORY LOOKUPS ---
   static getGloveInventory() {
@@ -57,6 +86,19 @@ export class PackingService {
 
   static getCustomers() {
     return db.prepare(`SELECT * FROM customers ORDER BY name`).all();
+  }
+
+  static getSizeStandards() {
+    try {
+      return db.prepare(`SELECT code, raw_label, sizes_json, is_legacy FROM size_standards ORDER BY is_legacy DESC, code ASC`).all().map(row => ({
+        code: row.code,
+        rawLabel: row.raw_label,
+        sizes: JSON.parse(row.sizes_json || '[]'),
+        isLegacy: Boolean(row.is_legacy)
+      }));
+    } catch {
+      return [{ code: 'LEGACY_7_11', rawLabel: 'LEGACY_7_11', sizes: [...REQUISITION_SIZES], isLegacy: true }];
+    }
   }
 
   static getProducts(customerId = null) {
@@ -94,23 +136,9 @@ export class PackingService {
     const normalizedOrderId = String(orderId || '').trim();
     if (!normalizedOrderId) throw new Error('Parent order is required.');
 
-    const sizes = {};
-    for (const size of REQUISITION_SIZES) {
-      const value = Number(requestedSizes?.[size] ?? 0);
-      if (!Number.isSafeInteger(value) || value < 0) {
-        throw new Error(`Size ${size} quantity must be a whole number greater than or equal to zero.`);
-      }
-      sizes[size] = value;
-    }
-    if (Object.keys(requestedSizes || {}).some(size => !REQUISITION_SIZES.includes(size))) {
-      throw new Error('Only sizes 7 through 11 are supported for this requisition.');
-    }
-    const requestedPairs = REQUISITION_SIZES.reduce((total, size) => total + sizes[size], 0);
-    if (requestedPairs <= 0) throw new Error('Enter a quantity for at least one size.');
-
     db.exec('BEGIN IMMEDIATE');
     try {
-      const order = db.prepare(`SELECT * FROM pending_orders WHERE order_id = ?`).get(normalizedOrderId);
+      const order = db.prepare(`SELECT * FROM active_orders WHERE order_id = ?`).get(normalizedOrderId);
       if (!order) {
         const error = new Error(`Parent order ${normalizedOrderId} was not found.`);
         error.statusCode = 404;
@@ -122,21 +150,40 @@ export class PackingService {
         throw error;
       }
 
-      const buyer = db.prepare(`
+      const scaleCodes = getScaleCodesForFormat(order.size_format || 'LEGACY_7_11');
+      const sizes = {};
+      for (const size of scaleCodes) {
+        const value = Number(requestedSizes?.[size] ?? 0);
+        if (!Number.isSafeInteger(value) || value < 0) {
+          throw new Error(`Size ${size} quantity must be a whole number greater than or equal to zero.`);
+        }
+        sizes[size] = value;
+      }
+      if (Object.keys(requestedSizes || {}).some(size => !scaleCodes.includes(size))) {
+        throw new Error(`Only sizes [${scaleCodes.join(', ')}] are supported for this requisition (${order.size_format || 'LEGACY_7_11'}).`);
+      }
+      const requestedPairs = scaleCodes.reduce((total, size) => total + sizes[size], 0);
+      if (requestedPairs <= 0) throw new Error('Enter a quantity for at least one size.');
+
+      const buyer = (order.customer_id
+        ? db.prepare(`SELECT id FROM customers WHERE id = ? LIMIT 1`).get(order.customer_id)
+        : null) || db.prepare(`
         SELECT id FROM customers WHERE name = ? COLLATE NOCASE LIMIT 1
       `).get(order.buyer_name);
-      const product = buyer && db.prepare(`
+      const product = (order.product_id
+        ? db.prepare(`SELECT id FROM products WHERE id = ? LIMIT 1`).get(order.product_id)
+        : null) || (buyer && db.prepare(`
         SELECT id FROM products
         WHERE customer_id = ? AND name = ? COLLATE NOCASE
         LIMIT 1
-      `).get(buyer.id, order.article_name);
+      `).get(buyer.id, order.article_name));
       if (!buyer || !product) {
         throw new Error('The parent order must match a customer and article in the master lists.');
       }
 
       const stockSummary = this.getOrderStockSummary(order);
-      for (const size of REQUISITION_SIZES) {
-        const remaining = stockSummary.remainingOrderSizes[size];
+      for (const size of scaleCodes) {
+        const remaining = Number(stockSummary.remainingOrderSizes[size] || 0);
         if (sizes[size] > remaining) {
           throw new Error(
             `Size ${size} request (${sizes[size]}) exceeds remaining unrequested order balance (${remaining} remaining of ${stockSummary.plannedSizes[size]} planned).`
@@ -205,33 +252,45 @@ export class PackingService {
 
   static getRequisitions() {
     return db.prepare(`
-      SELECT r.*, c.name AS customer_name, c.inspection_preference, p.name AS product_name
+      SELECT r.*, c.name AS customer_name, c.inspection_preference, p.name AS product_name,
+             COALESCE(NULLIF(o.size_format, ''), NULLIF(p.size_format, ''), 'LEGACY_7_11') AS effective_size_format
       FROM glove_requisitions r
       JOIN customers c ON r.customer_id = c.id
       JOIN products p ON r.product_id = p.id
+      LEFT JOIN pending_orders o ON r.order_id = o.order_id
       ORDER BY r.created_at DESC
-    `).all().map(row => ({
-      ...row,
-      sizes: parseRequisitionSizes(row.sizes_json),
-      wip: db.prepare(`SELECT * FROM packing_wip WHERE req_number = ?`).get(row.req_number) || null,
-      materialReq: db.prepare(`SELECT * FROM material_requisitions WHERE req_number = ?`).get(row.req_number) || null,
-      cartons: db.prepare(`SELECT * FROM cartons WHERE req_number = ? ORDER BY carton_number`).all(row.req_number),
-      alterations: db.prepare(`SELECT * FROM alterations WHERE req_number = ? ORDER BY id DESC`).all(row.req_number)
-    }));
+    `).all().map(row => {
+      const scaleCodes = getScaleCodesForFormat(row.effective_size_format);
+      return {
+        ...row,
+        sizeFormat: row.effective_size_format,
+        sizeCodes: scaleCodes,
+        sizes: parseRequisitionSizes(row.sizes_json, scaleCodes),
+        wip: db.prepare(`SELECT * FROM packing_wip WHERE req_number = ?`).get(row.req_number) || null,
+        materialReq: db.prepare(`SELECT * FROM material_requisitions WHERE req_number = ?`).get(row.req_number) || null,
+        cartons: db.prepare(`SELECT * FROM cartons WHERE req_number = ? ORDER BY carton_number`).all(row.req_number),
+        alterations: db.prepare(`SELECT * FROM alterations WHERE req_number = ? ORDER BY id DESC`).all(row.req_number)
+      };
+    });
   }
 
   static getRequisition(reqNumber) {
     const req = db.prepare(`
       SELECT r.*, c.name AS customer_name, c.inspection_preference, p.name AS product_name,
-             p.polybag_per_pair, p.silica_gel_per_pair, p.stickers_per_pair, p.pairs_per_carton
+             p.polybag_per_pair, p.silica_gel_per_pair, p.stickers_per_pair, p.pairs_per_carton,
+             COALESCE(NULLIF(o.size_format, ''), NULLIF(p.size_format, ''), 'LEGACY_7_11') AS effective_size_format
       FROM glove_requisitions r
       JOIN customers c ON r.customer_id = c.id
       JOIN products p ON r.product_id = p.id
+      LEFT JOIN pending_orders o ON r.order_id = o.order_id
       WHERE r.req_number = ?
     `).get(reqNumber);
 
     if (!req) return null;
-    req.sizes = parseRequisitionSizes(req.sizes_json);
+    const scaleCodes = getScaleCodesForFormat(req.effective_size_format);
+    req.sizeFormat = req.effective_size_format;
+    req.sizeCodes = scaleCodes;
+    req.sizes = parseRequisitionSizes(req.sizes_json, scaleCodes);
 
     const wip = db.prepare(`SELECT * FROM packing_wip WHERE req_number = ?`).get(reqNumber);
     const materialReq = db.prepare(`SELECT * FROM material_requisitions WHERE req_number = ?`).get(reqNumber);
@@ -533,6 +592,22 @@ export class PackingService {
   }
 
   // --- STEP 5: 2ND PACKING (PAIRS INTO CARTONS) ---
+  static parseDimensionsCbm(dimensionsCm = '60x40x35') {
+    const raw = String(dimensionsCm || '60x40x35').trim();
+    const match = raw.match(/(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)/i);
+    if (!match) {
+      return { dimensionsCm: '60x40x35', cbm: 0.084 };
+    }
+    const l = Number(match[1]);
+    const w = Number(match[2]);
+    const h = Number(match[3]);
+    if (!Number.isFinite(l) || !Number.isFinite(w) || !Number.isFinite(h) || l <= 0 || w <= 0 || h <= 0) {
+      return { dimensionsCm: '60x40x35', cbm: 0.084 };
+    }
+    const cbm = Number(((l * w * h) / 1000000).toFixed(4));
+    return { dimensionsCm: `${l}x${w}x${h}`, cbm };
+  }
+
   static executeStep5SecondPacking(reqNumber, pairsPerCartonOverride = null, options = {}) {
     const req = this.getRequisition(reqNumber);
     if (!req || !req.wip) throw new Error(`Requisition ${reqNumber} not found`);
@@ -551,23 +626,86 @@ export class PackingService {
       }
     }
 
-    const pairsPerCarton = pairsPerCartonOverride || req.pairs_per_carton || 50;
-    const totalCartons = Math.ceil(pairsReady / pairsPerCarton);
+    const pairsPerCarton = Number(pairsPerCartonOverride || req.pairs_per_carton || 50);
+    if (!Number.isFinite(pairsPerCarton) || pairsPerCarton <= 0) {
+      throw new Error(`Invalid pairs per carton: ${pairsPerCartonOverride}`);
+    }
 
-    // Delete existing cartons if re-packing
-    db.prepare(`DELETE FROM cartons WHERE req_number = ?`).run(reqNumber);
+    const { dimensionsCm, cbm } = this.parseDimensionsCbm(options?.dimensionsCm || '60x40x35');
+    const rawMode = String(options?.shippingMode || 'UNASSIGNED').toUpperCase();
+    const shippingMode = ['AIR', 'SEA', 'UNASSIGNED'].includes(rawMode) ? rawMode : 'UNASSIGNED';
+    const sealPrefix = String(options?.sealPrefix || 'QC-SEAL').trim() || 'QC-SEAL';
+    const dispatchedAt = shippingMode === 'AIR' || shippingMode === 'SEA' ? new Date().toISOString() : null;
 
-    let remaining = pairsReady;
-    for (let i = 1; i <= totalCartons; i++) {
-      const thisCartonPairs = Math.min(remaining, pairsPerCarton);
-      const cartonBarcode = `CTN-${reqNumber}-${String(i).padStart(3, '0')}`;
+    const requestedPairs = options?.pairsToPack != null ? Number(options.pairsToPack) : null;
+
+    if (requestedPairs == null) {
+      // Legacy full repack: replace existing cartons and box all step4_packing_good pairs
+      const totalCartons = Math.ceil(pairsReady / pairsPerCarton);
+      db.prepare(`DELETE FROM cartons WHERE req_number = ?`).run(reqNumber);
+
+      let remaining = pairsReady;
+      for (let i = 1; i <= totalCartons; i++) {
+        const thisCartonPairs = Math.min(remaining, pairsPerCarton);
+        const cartonBarcode = `CTN-${reqNumber}-${String(i).padStart(3, '0')}`;
+        const sealNo = `${sealPrefix}-${9080 + i}`;
+        db.prepare(`
+          INSERT INTO cartons (carton_barcode, req_number, carton_number, total_cartons, pairs_count, status, dimensions_cm, cbm, shipping_mode, dispatched_at, qc_seal_no)
+          VALUES (?, ?, ?, ?, ?, 'PACKED', ?, ?, ?, ?, ?)
+        `).run(cartonBarcode, reqNumber, i, totalCartons, thisCartonPairs, dimensionsCm, cbm, shippingMode, dispatchedAt, sealNo);
+        remaining -= thisCartonPairs;
+      }
+
       db.prepare(`
-        INSERT INTO cartons (carton_barcode, req_number, carton_number, total_cartons, pairs_count, status)
-        VALUES (?, ?, ?, ?, ?, 'PACKED')
-      `).run(cartonBarcode, reqNumber, i, totalCartons, thisCartonPairs);
+        UPDATE packing_wip
+        SET step5_cartons_packed = ?,
+            step5_pairs_packed = ?,
+            current_step = CASE WHEN final_qc_status = 'APPROVED_DISPATCH' THEN 'DISPATCH_APPROVED' ELSE 'FINAL_QC' END,
+            final_qc_status = CASE WHEN final_qc_status = 'APPROVED_DISPATCH' THEN 'APPROVED_DISPATCH' ELSE 'PENDING' END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE req_number = ?
+      `).run(totalCartons, pairsReady, reqNumber);
+
+      return this.getRequisition(reqNumber);
+    }
+
+    // Partial / incremental carton boxing
+    if (!Number.isFinite(requestedPairs) || requestedPairs <= 0) {
+      throw new Error(`Pairs to box must be greater than 0.`);
+    }
+
+    const existingStats = db.prepare(`
+      SELECT COUNT(*) as cnt, COALESCE(SUM(pairs_count), 0) as boxed_pairs, COALESCE(MAX(carton_number), 0) as max_ctn
+      FROM cartons WHERE req_number = ?
+    `).get(reqNumber);
+
+    const alreadyBoxed = Number(existingStats?.boxed_pairs || 0);
+    const remainingToBox = Math.max(0, pairsReady - alreadyBoxed);
+    if (requestedPairs > remainingToBox) {
+      throw new Error(`Cannot box ${requestedPairs} pairs; only ${remainingToBox} pairs remain unboxed.`);
+    }
+
+    const newCartonsCount = Math.ceil(requestedPairs / pairsPerCarton);
+    const prevCount = Number(existingStats?.cnt || 0);
+    const startNo = Number(existingStats?.max_ctn || 0) + 1;
+    const newTotalCartons = prevCount + newCartonsCount;
+
+    let remaining = requestedPairs;
+    for (let offset = 0; offset < newCartonsCount; offset++) {
+      const ctnNo = startNo + offset;
+      const thisCartonPairs = Math.min(remaining, pairsPerCarton);
+      const cartonBarcode = `CTN-${reqNumber}-${String(ctnNo).padStart(3, '0')}`;
+      const sealNo = `${sealPrefix}-${9080 + ctnNo}`;
+      db.prepare(`
+        INSERT INTO cartons (carton_barcode, req_number, carton_number, total_cartons, pairs_count, status, dimensions_cm, cbm, shipping_mode, dispatched_at, qc_seal_no)
+        VALUES (?, ?, ?, ?, ?, 'PACKED', ?, ?, ?, ?, ?)
+      `).run(cartonBarcode, reqNumber, ctnNo, newTotalCartons, thisCartonPairs, dimensionsCm, cbm, shippingMode, dispatchedAt, sealNo);
       remaining -= thisCartonPairs;
     }
 
+    db.prepare(`UPDATE cartons SET total_cartons = ? WHERE req_number = ?`).run(newTotalCartons, reqNumber);
+
+    const totalBoxedPairs = alreadyBoxed + requestedPairs;
     db.prepare(`
       UPDATE packing_wip
       SET step5_cartons_packed = ?,
@@ -576,7 +714,205 @@ export class PackingService {
           final_qc_status = CASE WHEN final_qc_status = 'APPROVED_DISPATCH' THEN 'APPROVED_DISPATCH' ELSE 'PENDING' END,
           updated_at = CURRENT_TIMESTAMP
       WHERE req_number = ?
-    `).run(totalCartons, pairsReady, reqNumber);
+    `).run(newTotalCartons, totalBoxedPairs, reqNumber);
+
+    return this.getRequisition(reqNumber);
+  }
+
+  static dispatchCartons(reqNumber, opts = {}) {
+    return runAtomicWipStep(() => this._dispatchCartons(reqNumber, opts));
+  }
+
+  static _dispatchCartons(
+    reqNumber,
+    {
+      shippingMode,
+      cartonBarcodes = null,
+      cartonCount = null,
+      airCartons = null,
+      seaCartons = null,
+      release = false,
+      expectedCartons = null,
+      expectedPairs = null,
+      actor = 'System Operator',
+      role = 'SUPER_USER'
+    } = {}
+  ) {
+    const req = this.getRequisition(reqNumber);
+    if (!req) throw httpErr(`Requisition ${reqNumber} not found`, 404);
+
+    const reqRow = db.prepare(`SELECT status, order_id FROM glove_requisitions WHERE req_number = ?`).get(reqNumber);
+    if (reqRow?.status === 'DISPATCHED') {
+      throw httpErr(`${reqNumber} is already dispatched; its cartons are locked.`, 409);
+    }
+
+    if (airCartons != null || seaCartons != null) {
+      const allCartons = db.prepare(`
+        SELECT carton_barcode, shipping_mode FROM cartons WHERE req_number = ? ORDER BY carton_number ASC
+      `).all(reqNumber);
+      const airN = wholeCount(airCartons, 'Air cartons');
+      const seaN = wholeCount(seaCartons, 'Sea cartons');
+      if (airN + seaN > allCartons.length) {
+        throw httpErr(`Air (${airN}) + Sea (${seaN}) exceeds total boxed cartons (${allCartons.length}).`, 400);
+      }
+
+      // Keep existing AIR/SEA assignments up to the requested counts so new allotments only fill UNASSIGNED/surplus slots.
+      const currentModes = allCartons.map(r => String(r.shipping_mode || 'UNASSIGNED').toUpperCase());
+      const nextModes = new Array(allCartons.length).fill(null);
+      let keptAir = 0;
+      let keptSea = 0;
+      for (let i = 0; i < currentModes.length; i++) {
+        if (currentModes[i] === 'AIR' && keptAir < airN) {
+          nextModes[i] = 'AIR';
+          keptAir += 1;
+        } else if (currentModes[i] === 'SEA' && keptSea < seaN) {
+          nextModes[i] = 'SEA';
+          keptSea += 1;
+        }
+      }
+
+      const poolIndices = [];
+      for (let i = 0; i < currentModes.length; i++) {
+        if (nextModes[i] === null && currentModes[i] === 'UNASSIGNED') poolIndices.push(i);
+      }
+      for (let i = 0; i < currentModes.length; i++) {
+        if (nextModes[i] === null && currentModes[i] !== 'UNASSIGNED') poolIndices.push(i);
+      }
+
+      let needAir = airN - keptAir;
+      let needSea = seaN - keptSea;
+      for (const idx of poolIndices) {
+        if (needAir > 0) {
+          nextModes[idx] = 'AIR';
+          needAir -= 1;
+        } else if (needSea > 0) {
+          nextModes[idx] = 'SEA';
+          needSea -= 1;
+        } else {
+          nextModes[idx] = 'UNASSIGNED';
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const updateOne = db.prepare(`
+        UPDATE cartons SET shipping_mode = ?, dispatched_at = ? WHERE req_number = ? AND carton_barcode = ?
+      `);
+      allCartons.forEach((row, idx) => {
+        const targetMode = nextModes[idx];
+        if (targetMode !== currentModes[idx]) {
+          updateOne.run(targetMode, targetMode === 'UNASSIGNED' ? null : nowIso, reqNumber, row.carton_barcode);
+        }
+      });
+      return this.getRequisition(reqNumber);
+    }
+
+    if (release) {
+      if (!req.wip || req.wip.final_qc_status !== 'APPROVED_DISPATCH') {
+        throw httpErr(`Complete AQL 1.5 inspection for ${reqNumber} before releasing.`, 409);
+      }
+      const allCartons = db.prepare(`SELECT shipping_mode, pairs_count FROM cartons WHERE req_number = ?`).all(reqNumber);
+      if (allCartons.length === 0) {
+        throw httpErr(`Box at least one master carton for ${reqNumber} before releasing.`, 409);
+      }
+      const unassigned = allCartons.filter(c => !c.shipping_mode || c.shipping_mode === 'UNASSIGNED').length;
+      if (unassigned > 0) {
+        throw httpErr(`Assign Air or Sea to all ${unassigned} unassigned carton(s) before releasing.`, 409);
+      }
+      const t = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(pairs_count), 0) AS pairs FROM cartons WHERE req_number = ?`).get(reqNumber);
+      const passed = Number(req.wip?.step4_packing_good);
+      if (!Number.isFinite(passed)) {
+        throw httpErr('Stage 4 passed quantity unavailable; cannot release.', 500);
+      }
+      if (t.pairs < passed) {
+        throw httpErr(`${passed - t.pairs} pairs on ${reqNumber} are still unboxed.`, 409);
+      }
+      if (t.pairs > passed) {
+        throw httpErr(`${reqNumber} has ${t.pairs - passed} more boxed pairs than Stage 4 passed.`, 409);
+      }
+      if (
+        (expectedCartons != null && Number(expectedCartons) !== t.n) ||
+        (expectedPairs != null && Number(expectedPairs) !== t.pairs)
+      ) {
+        throw httpErr('Manifest changed since it was opened. Reload and review before releasing.', 409);
+      }
+
+      const airPairs = allCartons
+        .filter(c => String(c.shipping_mode || '').toUpperCase() === 'AIR')
+        .reduce((s, c) => s + Number(c.pairs_count || 0), 0);
+      const seaPairs = allCartons
+        .filter(c => String(c.shipping_mode || '').toUpperCase() === 'SEA')
+        .reduce((s, c) => s + Number(c.pairs_count || 0), 0);
+
+      db.prepare(`UPDATE glove_requisitions SET status = 'DISPATCHED' WHERE req_number = ?`).run(reqNumber);
+      db.prepare(`
+        UPDATE packing_wip SET current_step = 'DISPATCH_APPROVED', updated_at = CURRENT_TIMESTAMP WHERE req_number = ?
+      `).run(reqNumber);
+      this.recordAuditLog({
+        actor,
+        role,
+        action: 'DISPATCH_RELEASE',
+        entityId: reqNumber,
+        orderId: reqRow?.order_id || '',
+        beforeSummary: `Boxed ${t.pairs} Prs`,
+        afterSummary: `Released: Air ${airPairs} Prs / Sea ${seaPairs} Prs`
+      });
+      return this.getRequisition(reqNumber);
+    }
+
+    const mode = String(shippingMode || '').toUpperCase();
+    if (!['AIR', 'SEA', 'UNASSIGNED'].includes(mode)) {
+      throw httpErr(`Invalid shipping mode: ${shippingMode}. Expected AIR, SEA, or UNASSIGNED.`, 400);
+    }
+
+    const dispatchedAt = mode === 'UNASSIGNED' ? null : new Date().toISOString();
+
+    if (Array.isArray(cartonBarcodes) && cartonBarcodes.length > 0) {
+      const placeholders = cartonBarcodes.map(() => '?').join(',');
+      db.prepare(`
+        UPDATE cartons
+        SET shipping_mode = ?, dispatched_at = ?
+        WHERE req_number = ? AND carton_barcode IN (${placeholders})
+      `).run(mode, dispatchedAt, reqNumber, ...cartonBarcodes);
+      return this.getRequisition(reqNumber);
+    }
+
+    if (cartonCount != null) {
+      const limit = wholeCount(cartonCount, 'Carton count');
+      if (limit <= 0) {
+        throw httpErr('Carton count must be at least 1.', 400);
+      }
+      const rows = mode === 'UNASSIGNED'
+        ? db.prepare(`
+            SELECT carton_barcode FROM cartons
+            WHERE req_number = ? AND shipping_mode IN ('AIR', 'SEA')
+            ORDER BY carton_number ASC
+            LIMIT ?
+          `).all(reqNumber, limit)
+        : db.prepare(`
+            SELECT carton_barcode FROM cartons
+            WHERE req_number = ? AND (shipping_mode IS NULL OR shipping_mode = 'UNASSIGNED')
+            ORDER BY carton_number ASC
+            LIMIT ?
+          `).all(reqNumber, limit);
+      if (rows.length === 0 && mode !== 'UNASSIGNED') {
+        throw httpErr(`No unassigned Ready cartons remain on ${reqNumber}.`, 409);
+      }
+      if (rows.length > 0) {
+        const placeholders = rows.map(() => '?').join(',');
+        db.prepare(`
+          UPDATE cartons
+          SET shipping_mode = ?, dispatched_at = ?
+          WHERE req_number = ? AND carton_barcode IN (${placeholders})
+        `).run(mode, dispatchedAt, reqNumber, ...rows.map(r => r.carton_barcode));
+      }
+      return this.getRequisition(reqNumber);
+    }
+
+    db.prepare(`
+      UPDATE cartons
+      SET shipping_mode = ?, dispatched_at = ?
+      WHERE req_number = ?
+    `).run(mode, dispatchedAt, reqNumber);
 
     return this.getRequisition(reqNumber);
   }
@@ -700,9 +1036,9 @@ export class PackingService {
       params.push(filters.maker);
     }
     if (filters.search) {
-      query += ` AND (po_number LIKE ? OR article_name LIKE ? OR rcv_number LIKE ? OR maker_contractor LIKE ?)`;
+      query += ` AND (po_number LIKE ? OR article_name LIKE ? OR rcv_number LIKE ? OR maker_contractor LIKE ? OR hall_name LIKE ? OR stitcher_name LIKE ? OR received_from LIKE ? OR receiving_note LIKE ?)`;
       const s = `%${filters.search}%`;
-      params.push(s, s, s, s);
+      params.push(s, s, s, s, s, s, s, s);
     }
     query += ` ORDER BY id ASC`;
     const rows = db.prepare(query).all(...params);
@@ -725,6 +1061,12 @@ export class PackingService {
       color,
       receivedFrom,
       received_from,
+      hallName,
+      hall_name,
+      stitcherName,
+      stitcher_name,
+      receivingNote,
+      receiving_note,
       strictInwardEntry,
       orderQty,
       rcvdPairs,
@@ -737,7 +1079,7 @@ export class PackingService {
 
     const orderIdVal = String(data.orderId || data.order_id || data.pendingOrderId || '').trim();
     const linkedOrder = orderIdVal
-      ? db.prepare(`SELECT * FROM pending_orders WHERE order_id = ?`).get(orderIdVal)
+      ? db.prepare(`SELECT * FROM active_orders WHERE order_id = ?`).get(orderIdVal)
       : null;
 
     // When tied to an order, article, model, colour, PO, and buyer are locked server-side from the order.
@@ -748,20 +1090,66 @@ export class PackingService {
     const effectiveCustomer = (linkedOrder ? linkedOrder.buyer_name : customerName) || customerName || 'Standard';
     const effectivePo = (linkedOrder ? linkedOrder.po_number : poNumber) || data.pendingOrderId || 'ORD-INWARD';
 
-    if (!makerContractor || !effectiveArticle) {
+    const hallNameVal = String(hallName ?? hall_name ?? '').trim();
+    const stitcherNameVal = String(stitcherName ?? stitcher_name ?? '').trim();
+    const receivingNoteVal = String(receivingNote ?? receiving_note ?? '').trim();
+
+    if (!hallNameVal && stitcherNameVal) {
+      const err = new Error('Hall is required when specifying a Stitcher.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    let canonicalHall = '';
+    let canonicalStitcher = '';
+    if (hallNameVal) {
+      const hallRow = db.prepare(
+        `SELECT id, name FROM halls WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1`
+      ).get(hallNameVal);
+      if (!hallRow) {
+        const err = new Error(`Hall "${hallNameVal}" does not exist in Super User Master Data.`);
+        err.statusCode = 400;
+        throw err;
+      }
+      if (!stitcherNameVal) {
+        const err = new Error(`Stitcher is required when receiving from ${hallRow.name}.`);
+        err.statusCode = 400;
+        throw err;
+      }
+      const hallStitchers = db.prepare(`SELECT id, name FROM stitchers WHERE hall_id = ?`).all(hallRow.id);
+      const matchedStitcher = hallStitchers.find(
+        s => String(s.name || '').trim().toLowerCase() === stitcherNameVal.toLowerCase()
+      );
+      if (!matchedStitcher) {
+        const err = new Error(`Stitcher "${stitcherNameVal}" is not assigned to ${hallRow.name}.`);
+        err.statusCode = 400;
+        throw err;
+      }
+      canonicalHall = hallRow.name;
+      canonicalStitcher = matchedStitcher.name;
+    }
+
+    let effectiveMakerContractor = String(makerContractor || canonicalHall || '').trim();
+    if (!effectiveMakerContractor || !effectiveArticle) {
       throw new Error('Maker/Contractor and Article are required');
     }
 
-    const hasExplicitReceivedFrom = receivedFrom !== undefined || received_from !== undefined || Boolean(strictInwardEntry);
-    const receivedFromVal = String(
-      receivedFrom ?? received_from ?? (hasExplicitReceivedFrom ? '' : makerContractor || 'Contractor Carrier')
-    ).trim();
+    const rawReceivedFrom = receivedFrom ?? received_from;
+    const explicitPersonOrNote = String(rawReceivedFrom ?? '').trim() || receivingNoteVal;
+    const hasExplicitReceivedFrom = rawReceivedFrom !== undefined || Boolean(strictInwardEntry);
+    const receivedFromVal = canonicalHall && canonicalStitcher
+      ? (explicitPersonOrNote || `${canonicalStitcher} (${canonicalHall})`)
+      : String(
+          rawReceivedFrom ?? (hasExplicitReceivedFrom ? '' : effectiveMakerContractor || 'Contractor Carrier')
+        ).trim();
     if (!receivedFromVal) {
       throw new Error('Received From (person name) is required');
     }
 
     const rcvdNum = Number(rcvdPairs || 0);
-    const orderNum = Number(orderQty || rcvdNum || 0);
+    const orderNum = linkedOrder
+      ? Number(linkedOrder.total_qty || orderQty || rcvdNum || 0)
+      : Number(orderQty || rcvdNum || 0);
     if (rcvdNum <= 0) {
       throw new Error('Received pairs count must be greater than 0');
     }
@@ -770,12 +1158,15 @@ export class PackingService {
       const allocRows = db.prepare(`
         SELECT * FROM order_contractor_allocations WHERE order_id = ? ORDER BY id ASC
       `).all(orderIdVal);
+      if (allocRows.length === 0 && linkedOrder.maker_contractor) {
+        effectiveMakerContractor = linkedOrder.maker_contractor;
+      }
       if (allocRows.length > 0) {
         const matchedAlloc = allocRows.find(
-          a => String(a.maker_contractor || '').trim().toLowerCase() === String(makerContractor).trim().toLowerCase()
+          a => String(a.maker_contractor || '').trim().toLowerCase() === effectiveMakerContractor.toLowerCase()
         );
         if (!matchedAlloc) {
-          throw new Error(`Contractor "${makerContractor}" is not allocated to Order ${orderIdVal}`);
+          throw new Error(`Contractor "${effectiveMakerContractor}" is not allocated to Order ${orderIdVal}`);
         }
         const allocCap = Number(matchedAlloc.total_qty || 0);
         if (allocCap > 0 && (allocRows.length > 1 || Boolean(strictInwardEntry))) {
@@ -797,7 +1188,16 @@ export class PackingService {
       }
     }
 
-    const balanceNum = Math.max(0, orderNum - rcvdNum);
+    const priorOrderRcvd = linkedOrder
+      ? Number(
+          db.prepare(`
+            SELECT COALESCE(SUM(rcvd_pairs), 0) AS total_rcvd
+            FROM store_receivings
+            WHERE order_id = ? AND COALESCE(is_voided, 0) = 0
+          `).get(orderIdVal)?.total_rcvd || 0
+        )
+      : 0;
+    const balanceNum = Math.max(0, orderNum - (priorOrderRcvd + rcvdNum));
 
     const year = new Date().getFullYear();
     const rcvPrefix = `RCV-${year}-`;
@@ -823,18 +1223,21 @@ export class PackingService {
 
     db.prepare(`
       INSERT INTO store_receivings 
-      (rcv_number, rcv_date, order_id, maker_contractor, customer_name, po_number, article_name, color_shade, received_from, order_qty, rcvd_pairs, allocated_pairs, unallocated_pairs, allocation_status, balance_qty, status, challan_no, gate_pass_no, vehicle_no, overage_allowed_pct)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'UNALLOCATED', ?, ?, ?, ?, ?, ?)
+      (rcv_number, rcv_date, order_id, maker_contractor, customer_name, po_number, article_name, color_shade, received_from, hall_name, stitcher_name, receiving_note, order_qty, rcvd_pairs, allocated_pairs, unallocated_pairs, allocation_status, balance_qty, status, challan_no, gate_pass_no, vehicle_no, overage_allowed_pct)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'UNALLOCATED', ?, ?, ?, ?, ?, ?)
     `).run(
       rcvNumber,
       dateVal,
       orderIdVal,
-      makerContractor,
+      effectiveMakerContractor,
       effectiveCustomer,
       effectivePo,
       effectiveArticle,
       effectiveColor,
       receivedFromVal,
+      canonicalHall,
+      canonicalStitcher,
+      receivingNoteVal,
       orderNum,
       rcvdNum,
       rcvdNum,
@@ -846,33 +1249,64 @@ export class PackingService {
       Number(overageAllowedPct || 2.0)
     );
 
-    // Save size breakdown if provided
+    // Save size breakdown if provided (cumulative across non-voided GRNs on the same order)
     if (Array.isArray(sizes) && sizes.length > 0) {
       const insertSize = db.prepare(`
         INSERT INTO receiving_size_breakdowns (rcv_number, size_code, order_pairs, rcvd_pairs, balance_pairs)
         VALUES (?, ?, ?, ?, ?)
       `);
+      const sumPriorSizeStmt = linkedOrder
+        ? db.prepare(`
+            SELECT COALESCE(SUM(rsb.rcvd_pairs), 0) AS prior_rcvd
+            FROM receiving_size_breakdowns rsb
+            JOIN store_receivings sr ON sr.rcv_number = rsb.rcv_number
+            WHERE sr.order_id = ? AND COALESCE(sr.is_voided, 0) = 0 AND rsb.size_code = ? AND sr.rcv_number != ?
+          `)
+        : null;
       for (const s of sizes) {
         const o = Number(s.orderPairs || 0);
         const r = Number(s.rcvdPairs || 0);
-        const b = Math.max(0, o - r);
+        const priorSz = sumPriorSizeStmt ? Number(sumPriorSizeStmt.get(orderIdVal, s.sizeCode, rcvNumber)?.prior_rcvd || 0) : 0;
+        const b = Math.max(0, o - (priorSz + r));
         insertSize.run(rcvNumber, s.sizeCode, o, r, b);
       }
     }
 
-    // Update raw gloves store inventory automatically
-    let product = db.prepare(`SELECT * FROM products WHERE name = ? COLLATE NOCASE`).get(effectiveArticle);
-    let customer = db.prepare(`SELECT * FROM customers WHERE name LIKE ?`).get(`%${effectiveCustomer}%`);
+    // Update raw gloves store inventory automatically (prefer explicit IDs, then customer-scoped exact match)
+    const explicitCustId = String(data.customerId || data.customer_id || linkedOrder?.customer_id || '').trim();
+    const explicitProdId = String(data.productId || data.product_id || linkedOrder?.product_id || '').trim();
+
+    let customer = explicitCustId
+      ? db.prepare(`SELECT * FROM customers WHERE id = ?`).get(explicitCustId)
+      : null;
+    if (!customer) {
+      customer = db.prepare(`SELECT * FROM customers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1`).get(effectiveCustomer);
+    }
+    if (!customer) {
+      customer = db.prepare(`SELECT * FROM customers WHERE name LIKE ? ORDER BY id ASC LIMIT 1`).get(`${effectiveCustomer}%`);
+    }
 
     if (!customer) {
-      const custId = `CUST-${effectiveCustomer.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8)}`;
+      const slug = effectiveCustomer.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'CUST';
+      const custId = `CUST-${slug}-${randomUUID().slice(0, 6).toUpperCase()}`;
       db.prepare(`INSERT OR IGNORE INTO customers (id, name, country, inspection_preference) VALUES (?, ?, 'Global', 'RANDOM')`)
         .run(custId, effectiveCustomer);
       customer = { id: custId, name: effectiveCustomer };
     }
 
+    let product = explicitProdId
+      ? db.prepare(`SELECT * FROM products WHERE id = ?`).get(explicitProdId)
+      : null;
     if (!product) {
-      const prodId = `GLV-${effectiveArticle.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10)}`;
+      product = db.prepare(`SELECT * FROM products WHERE customer_id = ? AND name = ? COLLATE NOCASE LIMIT 1`).get(customer.id, effectiveArticle);
+    }
+    if (!product) {
+      product = db.prepare(`SELECT * FROM products WHERE name = ? COLLATE NOCASE LIMIT 1`).get(effectiveArticle);
+    }
+
+    if (!product) {
+      const slug = effectiveArticle.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'ITEM';
+      const prodId = `GLV-${slug}-${randomUUID().slice(0, 6).toUpperCase()}`;
       db.prepare(`INSERT OR IGNORE INTO products (id, name, customer_id, polybag_per_pair, silica_gel_per_pair, stickers_per_pair, pairs_per_carton) VALUES (?, ?, ?, 1, 1, 2, 50)`)
         .run(prodId, effectiveArticle, customer.id);
       product = { id: prodId, name: effectiveArticle };
@@ -899,6 +1333,36 @@ export class PackingService {
     return { ...row, sizes: sizeRows };
   }
 
+  static getHallsWithStitchers() {
+    try {
+      const hallRows = db.prepare(`SELECT id, name, created_at FROM halls ORDER BY name COLLATE NOCASE ASC`).all();
+      const stitcherRows = db.prepare(`
+        SELECT id, hall_id, name, created_at
+        FROM stitchers
+        ORDER BY name COLLATE NOCASE ASC
+      `).all();
+      const byHall = new Map();
+      for (const s of stitcherRows) {
+        const arr = byHall.get(s.hall_id) || [];
+        arr.push({
+          id: s.id,
+          hallId: s.hall_id,
+          name: s.name,
+          createdAt: s.created_at
+        });
+        byHall.set(s.hall_id, arr);
+      }
+      return hallRows.map(h => ({
+        id: h.id,
+        name: h.name,
+        createdAt: h.created_at,
+        stitchers: byHall.get(h.id) || []
+      }));
+    } catch {
+      return [];
+    }
+  }
+
   static getReceivingDropdowns() {
     const makers = db.prepare(`
       SELECT DISTINCT maker_contractor FROM store_receivings ORDER BY maker_contractor
@@ -915,6 +1379,11 @@ export class PackingService {
     ];
     defaultMakers.forEach(m => {
       if (!makers.includes(m)) makers.push(m);
+    });
+
+    const halls = this.getHallsWithStitchers();
+    halls.forEach(h => {
+      if (!makers.includes(h.name)) makers.push(h.name);
     });
 
     const customers = db.prepare(`
@@ -935,7 +1404,8 @@ export class PackingService {
       SELECT DISTINCT po_number FROM store_receivings WHERE po_number IS NOT NULL AND po_number != '' ORDER BY po_number
     `).all().map(r => r.po_number);
 
-    return { makers, customers, articles, poList };
+    const sizeStandards = this.getSizeStandards();
+    return { makers, customers, articles, poList, sizeStandards, halls };
   }
 
   // --- PACKAGING BOM LOOKUP ---
@@ -985,67 +1455,173 @@ export class PackingService {
   }
 
   // --- CLOSED LOOP ALTERATION REWORK (Max 2-Rework Scrap Rule) ---
-  static completeAlterationRepair(alterationId, tailorName = 'Supervisor A', isScrap = false, deductionRate = 150) {
-    const alt = db.prepare(`SELECT * FROM alterations WHERE id = ?`).get(alterationId);
-    if (!alt) throw new Error(`Alteration #${alterationId} not found`);
+  static assignAlterationTailor(reqNumber, tailorName, alterationId = null, pairsToAssign = null) {
+    const cleanTailor = String(tailorName || '').trim();
+    if (!cleanTailor) throw new Error('Select or enter a tailor name before assigning.');
+    return runAtomicWipStep(() => {
+      if (alterationId != null && Number(alterationId) > 0) {
+        const res = db.prepare(`
+          UPDATE alterations
+          SET tailor_name = ?
+          WHERE id = ? AND status = 'SENT_FOR_ALTERATION'
+        `).run(cleanTailor, Number(alterationId));
+        if (!res.changes) throw new Error(`No active alteration ticket #${alterationId} found to assign.`);
+        return { reqNumber, alterationId: Number(alterationId), tailorName: cleanTailor, updatedCount: res.changes };
+      }
 
-    if (alt.status === 'RETURNED_TO_CHECKING') {
-      throw new Error(`Alteration #${alterationId} has already been repaired and returned`);
-    }
+      const cleanReq = String(reqNumber || '').trim();
+      if (!cleanReq) throw new Error('Requisition number is required.');
 
-    const currentReworks = Number(alt.rework_count || 1);
+      const openRows = db.prepare(`
+        SELECT * FROM alterations
+        WHERE req_number = ? AND status = 'SENT_FOR_ALTERATION'
+        ORDER BY CASE WHEN COALESCE(TRIM(tailor_name), '') IN ('', 'Supervisor A') THEN 0 ELSE 1 END, id ASC
+      `).all(cleanReq);
+      if (openRows.length === 0) {
+        throw new Error(`No active alteration tickets pending for ${cleanReq}.`);
+      }
 
-    // If marked scrap or exceeded 2 rework attempts -> Auto condemn to scrap
-    if (isScrap || currentReworks >= 2) {
+      const totalOpen = openRows.reduce((sum, r) => sum + Number(r.pairs_count || 0), 0);
+      const requestedPairs = pairsToAssign == null ? totalOpen : Number(pairsToAssign);
+      if (!Number.isInteger(requestedPairs) || requestedPairs <= 0 || requestedPairs > totalOpen) {
+        throw new Error(`Invalid assign quantity ${requestedPairs}: only ${totalOpen} pairs pending for ${cleanReq}.`);
+      }
+
+      let remaining = requestedPairs;
+      let updatedCount = 0;
+      for (const row of openRows) {
+        if (remaining <= 0) break;
+        const rowPairs = Number(row.pairs_count || 0);
+        if (rowPairs <= remaining) {
+          db.prepare(`UPDATE alterations SET tailor_name = ? WHERE id = ?`).run(cleanTailor, row.id);
+          remaining -= rowPairs;
+          updatedCount += 1;
+        } else {
+          db.prepare(`UPDATE alterations SET pairs_count = pairs_count - ? WHERE id = ?`).run(remaining, row.id);
+          db.prepare(`
+            INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, fault_party, tailor_name, rework_count, is_scrapped, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'SENT_FOR_ALTERATION')
+          `).run(
+            row.req_number,
+            row.source_stage,
+            remaining,
+            row.defect_reason,
+            row.fault_party || 'CONTRACTOR',
+            cleanTailor,
+            Number(row.rework_count || 1)
+          );
+          remaining = 0;
+          updatedCount += 1;
+        }
+      }
+
+      return { reqNumber: cleanReq, tailorName: cleanTailor, pairsAssigned: requestedPairs, updatedCount };
+    });
+  }
+
+  static completeAlterationRepair(alterationId, tailorName = 'Supervisor A', isScrap = false, deductionRate = 150, pairsToProcess = null) {
+    return runAtomicWipStep(() => {
+      const alt = db.prepare(`SELECT * FROM alterations WHERE id = ?`).get(alterationId);
+      if (!alt) throw new Error(`Alteration #${alterationId} not found`);
+
+      if (alt.status === 'RETURNED_TO_CHECKING') {
+        throw new Error(`Alteration #${alterationId} has already been repaired and returned`);
+      }
+
+      const totalAltPairs = Number(alt.pairs_count || 0);
+      const requestedPairs = pairsToProcess == null ? totalAltPairs : Number(pairsToProcess);
+      if (!Number.isInteger(requestedPairs) || requestedPairs <= 0 || requestedPairs > totalAltPairs) {
+        throw new Error(`Invalid repair quantity ${requestedPairs}: only ${totalAltPairs} pairs pending in Alteration #${alterationId}.`);
+      }
+      const processedPairs = requestedPairs;
+      const isPartial = processedPairs < totalAltPairs;
+      const currentReworks = Number(alt.rework_count || 1);
+      const effectiveTailor = tailorName || 'Supervisor A';
+
+      // If marked scrap or exceeded 2 rework attempts -> Auto condemn to scrap
+      if (isScrap || currentReworks >= 2) {
+        if (isPartial) {
+          db.prepare(`UPDATE alterations SET pairs_count = pairs_count - ? WHERE id = ?`).run(processedPairs, alterationId);
+          db.prepare(`
+            INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, fault_party, tailor_name, rework_count, is_scrapped, status, returned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'RETURNED_TO_CHECKING', CURRENT_TIMESTAMP)
+          `).run(
+            alt.req_number,
+            alt.source_stage,
+            processedPairs,
+            alt.defect_reason,
+            alt.fault_party || 'CONTRACTOR',
+            effectiveTailor,
+            currentReworks
+          );
+        } else {
+          db.prepare(`
+            UPDATE alterations
+            SET status = 'RETURNED_TO_CHECKING', tailor_name = ?, is_scrapped = 1, returned_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(effectiveTailor, alterationId);
+        }
+
+        const req = db.prepare(`SELECT p.name as article_name FROM glove_requisitions r JOIN products p ON r.product_id = p.id WHERE r.req_number = ?`).get(alt.req_number);
+        const articleName = req ? req.article_name : 'Gloves';
+        const totalDeduction = processedPairs * Number(deductionRate);
+
+        db.prepare(`
+          INSERT INTO scrap_ledger (req_number, article_name, scrapped_pairs, fault_party, defect_reason, financial_deduction_amount)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(alt.req_number, articleName, processedPairs, alt.fault_party || 'CONTRACTOR', alt.defect_reason || 'Unrepairable Defect', totalDeduction);
+
+        return {
+          alterationId,
+          status: 'CONDEMNED_TO_SCRAP',
+          pairsCount: processedPairs,
+          tailorName: effectiveTailor,
+          faultParty: alt.fault_party || 'CONTRACTOR',
+          financialDeduction: totalDeduction,
+          route: 'Scrap Condemned / Bin'
+        };
+      }
+
+      // Otherwise repaired -> MANDATORY FACTORY RULE: Must return to Step 1 Checking
+      if (isPartial) {
+        db.prepare(`UPDATE alterations SET pairs_count = pairs_count - ? WHERE id = ?`).run(processedPairs, alterationId);
+        db.prepare(`
+          INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, fault_party, tailor_name, rework_count, is_scrapped, status, returned_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'RETURNED_TO_CHECKING', CURRENT_TIMESTAMP)
+        `).run(
+          alt.req_number,
+          alt.source_stage,
+          processedPairs,
+          alt.defect_reason,
+          alt.fault_party || 'CONTRACTOR',
+          effectiveTailor,
+          currentReworks + 1
+        );
+      } else {
+        db.prepare(`
+          UPDATE alterations
+          SET status = 'RETURNED_TO_CHECKING', tailor_name = ?, rework_count = rework_count + 1, returned_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(effectiveTailor, alterationId);
+      }
+
+      // Advance pairs back to Step 1 Checking in WIP
       db.prepare(`
-        UPDATE alterations
-        SET status = 'RETURNED_TO_CHECKING', tailor_name = ?, is_scrapped = 1, returned_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(tailorName, alterationId);
-
-      const req = db.prepare(`SELECT p.name as article_name FROM glove_requisitions r JOIN products p ON r.product_id = p.id WHERE r.req_number = ?`).get(alt.req_number);
-      const articleName = req ? req.article_name : 'Gloves';
-      const totalDeduction = Number(alt.pairs_count) * Number(deductionRate);
-
-      db.prepare(`
-        INSERT INTO scrap_ledger (req_number, article_name, scrapped_pairs, fault_party, defect_reason, financial_deduction_amount)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(alt.req_number, articleName, alt.pairs_count, alt.fault_party || 'CONTRACTOR', alt.defect_reason || 'Unrepairable Defect', totalDeduction);
+        UPDATE packing_wip
+        SET step1_checking_in = step1_checking_in + ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE req_number = ?
+      `).run(processedPairs, alt.req_number);
 
       return {
         alterationId,
-        status: 'CONDEMNED_TO_SCRAP',
-        pairsCount: alt.pairs_count,
-        tailorName,
-        faultParty: alt.fault_party || 'CONTRACTOR',
-        financialDeduction: totalDeduction,
-        route: 'Scrap Condemned / Bin'
+        status: 'REPAIRED_RETURNED',
+        pairsCount: processedPairs,
+        tailorName: effectiveTailor,
+        route: 'RETURNED_TO_STAGE_1_CHECKING',
+        message: `${processedPairs} pairs repaired by ${effectiveTailor} and auto-routed back to Stage 1 Checking.`
       };
-    }
-
-    // Otherwise repaired -> MANDATORY FACTORY RULE: Must return to Step 1 Checking
-    db.prepare(`
-      UPDATE alterations
-      SET status = 'RETURNED_TO_CHECKING', tailor_name = ?, rework_count = rework_count + 1, returned_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(tailorName, alterationId);
-
-    // Advance pairs back to Step 1 Checking in WIP
-    db.prepare(`
-      UPDATE packing_wip
-      SET step1_checking_in = step1_checking_in + ?,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE req_number = ?
-    `).run(alt.pairs_count, alt.req_number);
-
-    return {
-      alterationId,
-      status: 'REPAIRED_RETURNED',
-      pairsCount: alt.pairs_count,
-      tailorName,
-      route: 'RETURNED_TO_STAGE_1_CHECKING',
-      message: `${alt.pairs_count} pairs repaired by ${tailorName} and auto-routed back to Stage 1 Checking.`
-    };
+    });
   }
 
   // --- AQL 1.5 SAMPLING INSPECTION & QUARANTINE ---
@@ -1094,38 +1670,59 @@ export class PackingService {
     const totalCartons = cartons.length;
     const totalPairs = cartons.reduce((sum, c) => sum + Number(c.pairs_count), 0);
     const totalGrossWt = cartons.reduce((sum, c) => sum + Number(c.gross_weight_kg || 4.8), 0);
-    const totalCBM = (totalCartons * (0.6 * 0.4 * 0.35)).toFixed(2); // 0.084 CBM per ctn
+    const totalCbmNum = cartons.reduce((sum, c) => {
+      const parsed = c.cbm != null ? Number(c.cbm) : this.parseDimensionsCbm(c.dimensions_cm || '60x40x35').cbm;
+      return sum + (Number.isFinite(parsed) ? parsed : 0.084);
+    }, 0);
+
+    const airCartons = cartons.filter(c => c.shipping_mode === 'AIR');
+    const seaCartons = cartons.filter(c => c.shipping_mode === 'SEA');
+    const unshippedCartons = cartons.filter(c => !c.shipping_mode || c.shipping_mode === 'UNASSIGNED');
 
     return {
       reqNumber: req.req_number,
       customerName: req.customer_name,
       articleName: req.product_name,
-      poNumber: req.notes || 'PO-27347',
+      poNumber: req.notes || '',
       totalCartons,
       totalPairs,
       totalGrossWtKg: totalGrossWt.toFixed(1),
-      totalCBM,
-      containerNo: 'MSKU-449102-1',
-      destinationPort: 'Southampton / Felixstowe UK',
-      cartons: cartons.map(c => ({
-        cartonNumber: `CTN-${String(c.carton_number).padStart(2, '0')}`,
-        pairsPerCarton: c.pairs_count,
-        netWeightKg: c.net_weight_kg || 4.2,
-        grossWeightKg: c.gross_weight_kg || 4.8,
-        dimensionsCm: c.dimensions_cm || '60x40x35',
-        barcodeVerified: true,
-        qcSealNo: c.qc_seal_no || `QC-SEAL-${9080 + c.carton_number}`,
-        aqlStatus: c.aql_status || 'PASSED'
-      }))
+      totalCBM: totalCbmNum.toFixed(3),
+      airCartons: airCartons.length,
+      airPairs: airCartons.reduce((sum, c) => sum + Number(c.pairs_count), 0),
+      seaCartons: seaCartons.length,
+      seaPairs: seaCartons.reduce((sum, c) => sum + Number(c.pairs_count), 0),
+      unshippedCartons: unshippedCartons.length,
+      unshippedPairs: unshippedCartons.reduce((sum, c) => sum + Number(c.pairs_count), 0),
+      cartons: cartons.map(c => {
+        const parsed = this.parseDimensionsCbm(c.dimensions_cm || '60x40x35');
+        const cbmVal = c.cbm != null ? Number(c.cbm) : parsed.cbm;
+        return {
+          cartonBarcode: c.carton_barcode,
+          cartonNumber: `CTN-${String(c.carton_number).padStart(2, '0')}`,
+          pairsPerCarton: c.pairs_count,
+          netWeightKg: c.net_weight_kg || 4.2,
+          grossWeightKg: c.gross_weight_kg || 4.8,
+          dimensionsCm: parsed.dimensionsCm,
+          cbm: Number(cbmVal.toFixed(4)),
+          shippingMode: c.shipping_mode || 'UNASSIGNED',
+          dispatchedAt: c.dispatched_at || null,
+          barcodeVerified: true,
+          qcSealNo: c.qc_seal_no || `QC-SEAL-${9080 + c.carton_number}`,
+          aqlStatus: c.aql_status || 'PASSED'
+        };
+      })
     };
   }
 
   // ============================================================================
   // SUPER USER ADMIN MANAGEMENT METHODS
   // ============================================================================
-  static getAdminOverview() {
+  static getAdminOverview(options = {}) {
+    const { includeCatalog = true, fullIntegrityCheck = false } = options || {};
     const journalMode = db.prepare('PRAGMA journal_mode').get()?.journal_mode || 'wal';
-    const integrity = db.prepare('PRAGMA integrity_check').get()?.integrity_check || 'ok';
+    const integrityRow = db.prepare(fullIntegrityCheck ? 'PRAGMA integrity_check' : 'PRAGMA quick_check').get();
+    const integrity = integrityRow?.quick_check || integrityRow?.integrity_check || 'ok';
 
     const tables = [
       'customers',
@@ -1144,7 +1741,9 @@ export class PackingService {
       'scrap_ledger',
       'export_shipments',
       'material_return_vouchers',
-      'pending_orders'
+      'pending_orders',
+      'halls',
+      'stitchers'
     ];
 
     const tableCounts = {};
@@ -1174,8 +1773,9 @@ export class PackingService {
     const alterations = this.getAlterations();
     const scrapLedger = db.prepare(`SELECT * FROM scrap_ledger ORDER BY id DESC`).all();
     const mrvList = db.prepare(`SELECT * FROM material_return_vouchers ORDER BY created_at DESC`).all();
-    const customers = this.getCustomers();
-    const products = this.getProducts();
+    const customers = includeCatalog ? this.getCustomers() : undefined;
+    const products = includeCatalog ? this.getProducts() : undefined;
+    const sizeStandards = includeCatalog ? this.getSizeStandards() : undefined;
     const gloveInventory = this.getGloveInventory();
     const materialInventory = this.getMaterialInventory();
     const materialReqs = this.getMaterialRequisitions();
@@ -1191,6 +1791,7 @@ export class PackingService {
       },
       customers,
       products,
+      sizeStandards,
       gloveInventory,
       materialInventory,
       receivings,
@@ -1200,19 +1801,26 @@ export class PackingService {
       scrapLedger,
       mrvList,
       dropdowns,
-      pendingOrders
+      pendingOrders,
+      halls: dropdowns.halls
     };
   }
 
   static getOrderStockSummary(orderRow) {
     const orderId = orderRow.order_id;
-    const plannedSizes = {
-      '7': Number(orderRow.size_7 || 0),
-      '8': Number(orderRow.size_8 || 0),
-      '9': Number(orderRow.size_9 || 0),
-      '10': Number(orderRow.size_10 || 0),
-      '11': Number(orderRow.size_11 || 0)
-    };
+    const sizeFormat = String(orderRow.size_format || 'LEGACY_7_11').trim() || 'LEGACY_7_11';
+    const scaleCodes = getScaleCodesForFormat(sizeFormat);
+    const isLegacy = sizeFormat === 'LEGACY_7_11';
+    const parsedOrderJson = isLegacy ? {} : JSON.parse(orderRow.sizes_json || '{}');
+    const plannedSizes = isLegacy
+      ? {
+          '7': Number(orderRow.size_7 || 0),
+          '8': Number(orderRow.size_8 || 0),
+          '9': Number(orderRow.size_9 || 0),
+          '10': Number(orderRow.size_10 || 0),
+          '11': Number(orderRow.size_11 || 0)
+        }
+      : Object.fromEntries(scaleCodes.map(sz => [sz, Number(parsedOrderJson[sz] || 0)]));
 
     const existingReqs = db.prepare(`
       SELECT requested_pairs, sizes_json, status
@@ -1220,24 +1828,24 @@ export class PackingService {
       WHERE order_id = ? AND COALESCE(is_voided, 0) = 0
     `).all(orderId);
 
-    const requestedSizes = { '7': 0, '8': 0, '9': 0, '10': 0, '11': 0 };
+    const requestedSizes = Object.fromEntries(scaleCodes.map(sz => [sz, 0]));
     let requestedPairs = 0;
     let pendingReqPairs = 0;
     for (const reqRow of existingReqs) {
-      const parsed = parseRequisitionSizes(reqRow.sizes_json);
+      const parsed = parseRequisitionSizes(reqRow.sizes_json, scaleCodes);
       const reqQty = Number(reqRow.requested_pairs || 0);
       requestedPairs += reqQty;
       if (reqRow.status === 'PENDING') {
         pendingReqPairs += reqQty;
       }
-      for (const size of REQUISITION_SIZES) {
+      for (const size of scaleCodes) {
         requestedSizes[size] += Number(parsed[size] || 0);
       }
     }
 
-    const remainingOrderSizes = { '7': 0, '8': 0, '9': 0, '10': 0, '11': 0 };
-    for (const size of REQUISITION_SIZES) {
-      remainingOrderSizes[size] = Math.max(0, plannedSizes[size] - requestedSizes[size]);
+    const remainingOrderSizes = Object.fromEntries(scaleCodes.map(sz => [sz, 0]));
+    for (const size of scaleCodes) {
+      remainingOrderSizes[size] = Math.max(0, Number(plannedSizes[size] || 0) - Number(requestedSizes[size] || 0));
     }
 
     const grnRows = db.prepare(`
@@ -1247,15 +1855,15 @@ export class PackingService {
     `).all(orderId, orderId);
     const receivedPairs = grnRows.reduce((sum, row) => sum + Number(row.rcvd_pairs || 0), 0);
 
-    const receivedSizes = { '7': 0, '8': 0, '9': 0, '10': 0, '11': 0 };
+    const receivedSizes = Object.fromEntries(scaleCodes.map(sz => [sz, 0]));
     const grnSizeMap = new Map();
     if (grnRows.length > 0) {
       const sizeStmt = db.prepare(`SELECT size_code, rcvd_pairs FROM receiving_size_breakdowns WHERE rcv_number = ?`);
       for (const grn of grnRows) {
-        const sMap = { '7': 0, '8': 0, '9': 0, '10': 0, '11': 0 };
+        const sMap = Object.fromEntries(scaleCodes.map(sz => [sz, 0]));
         for (const sRow of sizeStmt.all(grn.rcv_number)) {
           const code = String(sRow.size_code || '');
-          if (REQUISITION_SIZES.includes(code)) {
+          if (scaleCodes.includes(code)) {
             const qty = Number(sRow.rcvd_pairs || 0);
             receivedSizes[code] += qty;
             sMap[code] += qty;
@@ -1272,6 +1880,8 @@ export class PackingService {
       ? allocRows
       : [{
           maker_contractor: orderRow.maker_contractor,
+          size_format: sizeFormat,
+          sizes_json: orderRow.sizes_json || '{}',
           size_7: orderRow.size_7,
           size_8: orderRow.size_8,
           size_9: orderRow.size_9,
@@ -1282,29 +1892,34 @@ export class PackingService {
         }];
     const contractorAllocations = effectiveAllocRows.map(a => {
       const makerName = String(a.maker_contractor || '').trim();
-      const allocSizes = {
-        '7': Number(a.size_7 || 0),
-        '8': Number(a.size_8 || 0),
-        '9': Number(a.size_9 || 0),
-        '10': Number(a.size_10 || 0),
-        '11': Number(a.size_11 || 0)
-      };
-      const allocTotal = Number(a.total_qty || (allocSizes['7'] + allocSizes['8'] + allocSizes['9'] + allocSizes['10'] + allocSizes['11']));
+      const allocFormat = String(a.size_format || sizeFormat || 'LEGACY_7_11').trim();
+      const parsedAllocJson = allocFormat === 'LEGACY_7_11' ? {} : JSON.parse(a.sizes_json || '{}');
+      const allocSizes = allocFormat === 'LEGACY_7_11'
+        ? {
+            '7': Number(a.size_7 || 0),
+            '8': Number(a.size_8 || 0),
+            '9': Number(a.size_9 || 0),
+            '10': Number(a.size_10 || 0),
+            '11': Number(a.size_11 || 0)
+          }
+        : Object.fromEntries(scaleCodes.map(sz => [sz, Number(parsedAllocJson[sz] || 0)]));
+      const allocSum = scaleCodes.reduce((s, sz) => s + Number(allocSizes[sz] || 0), 0);
+      const allocTotal = Number(a.total_qty ?? allocSum);
       const makerGrns = grnRows.filter(
         g => String(g.maker_contractor || '').trim().toLowerCase() === makerName.toLowerCase()
       );
       const makerRcvdPairs = makerGrns.reduce((sum, g) => sum + Number(g.rcvd_pairs || 0), 0);
-      const makerRcvdSizes = { '7': 0, '8': 0, '9': 0, '10': 0, '11': 0 };
+      const makerRcvdSizes = Object.fromEntries(scaleCodes.map(sz => [sz, 0]));
       for (const mg of makerGrns) {
         const sMap = grnSizeMap.get(mg.rcv_number);
         if (!sMap) continue;
-        for (const sz of REQUISITION_SIZES) {
+        for (const sz of scaleCodes) {
           makerRcvdSizes[sz] += Number(sMap[sz] || 0);
         }
       }
-      const makerRemainingSizes = { '7': 0, '8': 0, '9': 0, '10': 0, '11': 0 };
-      for (const sz of REQUISITION_SIZES) {
-        makerRemainingSizes[sz] = Math.max(0, allocSizes[sz] - makerRcvdSizes[sz]);
+      const makerRemainingSizes = Object.fromEntries(scaleCodes.map(sz => [sz, 0]));
+      for (const sz of scaleCodes) {
+        makerRemainingSizes[sz] = Math.max(0, Number(allocSizes[sz] || 0) - Number(makerRcvdSizes[sz] || 0));
       }
       return {
         maker: makerName,
@@ -1326,8 +1941,13 @@ export class PackingService {
     const issuedPairs = Number(allocRow?.total_alloc || 0);
     const availableDockPairs = Math.max(0, receivedPairs - issuedPairs);
     const unclaimedDockPairs = Math.max(0, availableDockPairs - pendingReqPairs);
+    const unclaimedDockSizes = Object.fromEntries(
+      scaleCodes.map(sz => [sz, Math.max(0, Number(receivedSizes[sz] || 0) - Number(requestedSizes[sz] || 0))])
+    );
 
     return {
+      sizeFormat,
+      scaleCodes,
       plannedSizes,
       requestedSizes,
       remainingOrderSizes,
@@ -1338,22 +1958,27 @@ export class PackingService {
       issuedPairs,
       availableDockPairs,
       unclaimedDockPairs,
+      unclaimedDockSizes,
       contractorAllocations
     };
   }
 
   static getPendingOrders() {
     try {
-      const rows = db.prepare(`SELECT * FROM pending_orders ORDER BY created_at DESC, order_id DESC`).all();
+      const rows = db.prepare(`SELECT * FROM active_orders ORDER BY created_at DESC, order_id DESC`).all();
       return rows.map(r => {
         const stock = this.getOrderStockSummary(r);
         return {
           orderId: r.order_id,
+          customerId: r.customer_id || '',
           buyer: r.buyer_name,
           maker: r.maker_contractor,
           po: r.po_number,
+          productId: r.product_id || '',
           article: r.article_name,
           color: r.color_shade,
+          sizeFormat: stock.sizeFormat,
+          sizeCodes: stock.scaleCodes,
           sizes: stock.plannedSizes,
           totalQty: Number(r.total_qty || 0),
           dueDate: r.due_date || '',
@@ -1362,9 +1987,11 @@ export class PackingService {
           receivedPairs: stock.receivedPairs,
           issuedPairs: stock.issuedPairs,
           requestedPairs: stock.requestedPairs,
+          requestedSizes: stock.requestedSizes,
           pendingReqPairs: stock.pendingReqPairs,
           availableDockPairs: stock.availableDockPairs,
           unclaimedDockPairs: stock.unclaimedDockPairs,
+          unclaimedDockSizes: stock.unclaimedDockSizes,
           remainingOrderSizes: stock.remainingOrderSizes,
           receivedSizes: stock.receivedSizes,
           contractorAllocations: stock.contractorAllocations
@@ -1377,7 +2004,25 @@ export class PackingService {
 
   static createPendingOrderAdmin(payload, actor = 'Super User', role = 'SUPER_USER') {
     this.enforceRolePermission(role, 'ORDER_CREATE');
+    if (Array.isArray(payload?.items) && payload.items.length > 0) {
+      const { baseOrderId, orderId, orderIds } = createPendingOrderBatch(db, payload, {
+        actor,
+        role,
+        recordAuditLog: entry => this.recordAuditLog(entry)
+      });
+      return { baseOrderId, orderId, orderIds, orders: this.getPendingOrders() };
+    }
     const { orderId } = createPendingOrder(db, payload, {
+      actor,
+      role,
+      recordAuditLog: entry => this.recordAuditLog(entry)
+    });
+    return { orderId, orderIds: [orderId], orders: this.getPendingOrders() };
+  }
+
+  static updatePendingOrderAdmin(orderId, payload, actor = 'Super User', role = 'SUPER_USER') {
+    this.enforceRolePermission(role, 'ORDER_ADJUST');
+    updatePendingOrder(db, orderId, payload, {
       actor,
       role,
       recordAuditLog: entry => this.recordAuditLog(entry)
@@ -1464,14 +2109,34 @@ export class PackingService {
     return this.getCustomers();
   }
 
-  static upsertProductAdmin({ id, name, customerId, polybagPerPair, silicaGelPerPair, stickersPerPair, pairsPerCarton }) {
+  static upsertProductAdmin({
+    id,
+    name,
+    customerId,
+    articleCode,
+    colorSpec,
+    sizeFormat,
+    polybagPerPair,
+    silicaGelPerPair,
+    stickersPerPair,
+    pairsPerCarton
+  }) {
     if (!name || !customerId) throw new Error('Article name and customerId are required');
-    const prodId = id || `GLV-${name.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8)}-${Date.now().toString().slice(-2)}`;
+    const cleanName = name.trim();
+    const slug = cleanName.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'ITEM';
+    const prodId = id || `GLV-${slug}-${randomUUID().slice(0, 6).toUpperCase()}`;
+    const format = String(sizeFormat || 'ALPHA_2XS_5XL').trim() || 'ALPHA_2XS_5XL';
     db.prepare(`
-      INSERT INTO products (id, name, customer_id, polybag_per_pair, silica_gel_per_pair, stickers_per_pair, pairs_per_carton)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO products (
+        id, name, raw_name, article_code, raw_color, color_spec, size_format,
+        customer_id, polybag_per_pair, silica_gel_per_pair, stickers_per_pair, pairs_per_carton
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
+        article_code = excluded.article_code,
+        color_spec = excluded.color_spec,
+        size_format = excluded.size_format,
         customer_id = excluded.customer_id,
         polybag_per_pair = excluded.polybag_per_pair,
         silica_gel_per_pair = excluded.silica_gel_per_pair,
@@ -1479,7 +2144,12 @@ export class PackingService {
         pairs_per_carton = excluded.pairs_per_carton
     `).run(
       prodId,
-      name.trim(),
+      cleanName,
+      cleanName,
+      String(articleCode || '').trim(),
+      String(colorSpec || '').trim(),
+      String(colorSpec || '').trim(),
+      format,
       customerId,
       Number(polybagPerPair ?? 1),
       Number(silicaGelPerPair ?? 1),
@@ -1487,6 +2157,175 @@ export class PackingService {
       Number(pairsPerCarton ?? 50)
     );
     return this.getProducts();
+  }
+
+  static createHallAdmin(name, actor = 'Super User', role = 'SUPER_USER') {
+    if (String(role || 'SUPER_USER').trim().toUpperCase() !== 'SUPER_USER') {
+      const err = new Error(`RBAC Forbidden: Role ${role} is not permitted to manage Halls.`);
+      err.statusCode = 403;
+      throw err;
+    }
+    const cleanName = String(name || '').trim();
+    if (!cleanName) {
+      const err = new Error('Hall name is required.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const duplicate = db.prepare(`SELECT id FROM halls WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1`).get(cleanName);
+    if (duplicate) {
+      const err = new Error(`Hall "${cleanName}" already exists.`);
+      err.statusCode = 409;
+      throw err;
+    }
+    const info = db.prepare(`INSERT INTO halls (name) VALUES (?)`).run(cleanName);
+    this.recordAuditLog({
+      actor,
+      role,
+      action: 'HALL_CREATE',
+      entityId: cleanName,
+      beforeSummary: 'Halls Registry',
+      afterSummary: `Added Hall ${cleanName}`
+    });
+    return {
+      id: Number(info.lastInsertRowid),
+      name: cleanName,
+      halls: this.getHallsWithStitchers()
+    };
+  }
+
+  static deleteHallAdmin(hallId, actor = 'Super User', role = 'SUPER_USER') {
+    if (String(role || 'SUPER_USER').trim().toUpperCase() !== 'SUPER_USER') {
+      const err = new Error(`RBAC Forbidden: Role ${role} is not permitted to manage Halls.`);
+      err.statusCode = 403;
+      throw err;
+    }
+    const numericId = Number(hallId);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      const err = new Error('Valid hall id is required.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const hall = db.prepare(`SELECT id, name FROM halls WHERE id = ?`).get(numericId);
+    if (!hall) {
+      const err = new Error('Hall not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    const stitchers = db.prepare(`SELECT id, name FROM stitchers WHERE hall_id = ?`).all(numericId);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare(`DELETE FROM stitchers WHERE hall_id = ?`).run(numericId);
+      db.prepare(`DELETE FROM halls WHERE id = ?`).run(numericId);
+      this.recordAuditLog({
+        actor,
+        role,
+        action: 'HALL_DELETE',
+        entityId: hall.name,
+        beforeSummary: `Hall ${hall.name} (${stitchers.length} stitcher${stitchers.length === 1 ? '' : 's'})`,
+        afterSummary: 'Deleted Hall'
+      });
+      db.exec('COMMIT');
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw err;
+    }
+    return {
+      deleted: true,
+      hallId: numericId,
+      hallName: hall.name,
+      halls: this.getHallsWithStitchers()
+    };
+  }
+
+  static createStitcherAdmin(hallId, name, actor = 'Super User', role = 'SUPER_USER') {
+    if (String(role || 'SUPER_USER').trim().toUpperCase() !== 'SUPER_USER') {
+      const err = new Error(`RBAC Forbidden: Role ${role} is not permitted to manage Stitchers.`);
+      err.statusCode = 403;
+      throw err;
+    }
+    const numericHallId = Number(hallId);
+    if (!Number.isInteger(numericHallId) || numericHallId <= 0) {
+      const err = new Error('Valid hall id is required.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const hall = db.prepare(`SELECT id, name FROM halls WHERE id = ?`).get(numericHallId);
+    if (!hall) {
+      const err = new Error('Hall not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    const cleanName = String(name || '').trim();
+    if (!cleanName) {
+      const err = new Error('Stitcher name is required.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const duplicate = db.prepare(
+      `SELECT id FROM stitchers WHERE hall_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1`
+    ).get(numericHallId, cleanName);
+    if (duplicate) {
+      const err = new Error(`Stitcher "${cleanName}" already exists in ${hall.name}.`);
+      err.statusCode = 409;
+      throw err;
+    }
+    const info = db.prepare(`INSERT INTO stitchers (hall_id, name) VALUES (?, ?)`).run(numericHallId, cleanName);
+    this.recordAuditLog({
+      actor,
+      role,
+      action: 'STITCHER_CREATE',
+      entityId: `${hall.name} / ${cleanName}`,
+      beforeSummary: `${hall.name} Stitchers`,
+      afterSummary: `Added Stitcher ${cleanName}`
+    });
+    return {
+      id: Number(info.lastInsertRowid),
+      hallId: numericHallId,
+      hallName: hall.name,
+      name: cleanName,
+      halls: this.getHallsWithStitchers()
+    };
+  }
+
+  static deleteStitcherAdmin(stitcherId, actor = 'Super User', role = 'SUPER_USER') {
+    if (String(role || 'SUPER_USER').trim().toUpperCase() !== 'SUPER_USER') {
+      const err = new Error(`RBAC Forbidden: Role ${role} is not permitted to manage Stitchers.`);
+      err.statusCode = 403;
+      throw err;
+    }
+    const numericId = Number(stitcherId);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      const err = new Error('Valid stitcher id is required.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const row = db.prepare(`
+      SELECT s.id, s.hall_id, s.name, h.name AS hall_name
+      FROM stitchers s
+      JOIN halls h ON h.id = s.hall_id
+      WHERE s.id = ?
+    `).get(numericId);
+    if (!row) {
+      const err = new Error('Stitcher not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    db.prepare(`DELETE FROM stitchers WHERE id = ?`).run(numericId);
+    this.recordAuditLog({
+      actor,
+      role,
+      action: 'STITCHER_DELETE',
+      entityId: `${row.hall_name} / ${row.name}`,
+      beforeSummary: `${row.hall_name} Stitcher: ${row.name}`,
+      afterSummary: 'Deleted Stitcher'
+    });
+    return {
+      deleted: true,
+      stitcherId: numericId,
+      stitcherName: row.name,
+      hallName: row.hall_name,
+      halls: this.getHallsWithStitchers()
+    };
   }
 
   static overrideWipAdmin(reqNumber, payload) {
@@ -1597,7 +2436,7 @@ export class PackingService {
       'ALTERATION_CYCLE_UPDATE',
       'SCRAP_CONDEMN'
     ],
-    INWARD_CLERK: ['GRN_RECEIVE', 'REQ_ISSUE'],
+    INWARD_CLERK: ['GRN_RECEIVE', 'REQ_ISSUE', 'ALTERATION_CYCLE_UPDATE', 'SCRAP_CONDEMN'],
     PACKING_SUPERVISOR: ['REQ_CREATE', 'WIP_STAGE_ADVANCE', 'STAGE_5_CARTON_SEAL'],
     QC_INSPECTOR: ['FINAL_QC_APPROVE', 'FINAL_QC_REJECT', 'WIP_STAGE_ADVANCE'],
     ALTERATION_LEAD: ['ALTERATION_CYCLE_UPDATE', 'SCRAP_CONDEMN']
@@ -1917,7 +2756,7 @@ export class PackingService {
       reason = reason.reason || 'Short-shipped closure';
     }
     this.enforceRolePermission(role, 'ORDER_SHORT_CLOSE');
-    const ord = db.prepare(`SELECT * FROM pending_orders WHERE order_id = ?`).get(orderId);
+    const ord = db.prepare(`SELECT * FROM active_orders WHERE order_id = ?`).get(orderId);
     if (!ord) throw new Error(`Pending Order ${orderId} not found`);
 
     db.prepare(

@@ -933,7 +933,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       }, inwardCookie);
       assert.equal(missingReceiver.status, 400);
 
-      // Valid receivedFrom saves receiving, ignoring tampered article & color from client
+      // Valid receivedFrom saves receiving, ignoring tampered buyer/article/color/orderQty from client
       const validGrn = await apiFetch(`${baseUrl}/api/store/receivings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -944,6 +944,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
           customerName: 'TAMPERED-BUYER',
           articleName: 'TAMPERED-ARTICLE',
           colorShade: 'TAMPERED-COLOR',
+          orderQty: 99999,
           receivedFrom: 'Bilal Driver',
           strictInwardEntry: true,
           rcvdPairs: 50
@@ -955,7 +956,28 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       assert.equal(validData.article_name, master.article);
       assert.equal(validData.color_shade, 'Hi-Vis Neon');
       assert.equal(validData.customer_name, master.buyer);
+      assert.equal(validData.order_qty, 200);
+      assert.equal(validData.balance_qty, 150);
       assert.equal(validData.received_from, 'Bilal Driver');
+
+      // Second partial GRN subtracts cumulative prior GRNs on the same order (200 - 50 - 30 = 120)
+      const secondGrn = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rcvDate: '01-11-2026',
+          orderId,
+          makerContractor: 'Hall A',
+          receivedFrom: 'Bilal Driver',
+          strictInwardEntry: true,
+          rcvdPairs: 30
+        })
+      }, inwardCookie);
+      assert.equal(secondGrn.status, 200);
+      const secondData = (await secondGrn.json()).data;
+      assert.equal(secondData.order_qty, 200);
+      assert.equal(secondData.balance_qty, 120);
+      db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(secondData.rcv_number);
     } finally {
       if (rcvNumber) db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNumber);
       if (orderId) {
@@ -1069,6 +1091,718 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNo);
       }
       if (orderId) {
+        db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(orderId);
+        db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(orderId);
+      }
+    }
+  });
+
+  test('API: /api/admin/overview supports ?includeCatalog=0 fast incremental refresh without resending catalog SKUs', async () => {
+    const fullRes = await apiFetch(`${baseUrl}/api/admin/overview`);
+    assert.equal(fullRes.status, 200);
+    const fullJson = await fullRes.json();
+    assert.equal(fullJson.success, true);
+    assert.equal(fullJson.data.dbHealth.integrity, 'ok');
+    assert.ok(Array.isArray(fullJson.data.products) && fullJson.data.products.length > 0);
+    assert.ok(Array.isArray(fullJson.data.customers) && fullJson.data.customers.length > 0);
+    assert.ok(Array.isArray(fullJson.data.sizeStandards) && fullJson.data.sizeStandards.length > 0);
+
+    const slimRes = await apiFetch(`${baseUrl}/api/admin/overview?includeCatalog=0`);
+    assert.equal(slimRes.status, 200);
+    const slimJson = await slimRes.json();
+    assert.equal(slimJson.success, true);
+    assert.equal(slimJson.data.dbHealth.integrity, 'ok');
+    assert.equal(slimJson.data.products, undefined);
+    assert.equal(slimJson.data.customers, undefined);
+    assert.equal(slimJson.data.sizeStandards, undefined);
+    assert.ok(Array.isArray(slimJson.data.pendingOrders));
+  });
+
+  test('API authentication: session cookie omits Secure on plain HTTP LAN requests even in production and adds Secure for HTTPS proxies', async () => {
+    const prevNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const httpLogin = await fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: adminUsername, password: adminPassword })
+      });
+      assert.equal(httpLogin.status, 200);
+      const httpCookie = httpLogin.headers.get('set-cookie') || '';
+      assert.match(httpCookie, /HttpOnly/);
+      assert.equal(/;\s*Secure\b/i.test(httpCookie), false);
+      const httpTok = decodeURIComponent(httpCookie.split(';')[0].split('=')[1] || '');
+      if (httpTok) AuthService.destroySession(httpTok);
+
+      const httpsLogin = await fetch(`${baseUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-Proto': 'https' },
+        body: JSON.stringify({ username: adminUsername, password: adminPassword })
+      });
+      assert.equal(httpsLogin.status, 200);
+      const httpsCookie = httpsLogin.headers.get('set-cookie') || '';
+      assert.match(httpsCookie, /;\s*Secure\b/i);
+      const httpsTok = decodeURIComponent(httpsCookie.split(';')[0].split('=')[1] || '');
+      if (httpsTok) AuthService.destroySession(httpsTok);
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+    }
+  });
+
+  test('API RBAC: INWARD_CLERK can inspect alterations and return repaired/partial pairs back to Stage 1', async () => {
+    const master = db.prepare(`
+      SELECT c.name AS buyer, p.name AS article
+      FROM customers c JOIN products p ON p.customer_id = c.id
+      WHERE p.name = 'Model A9'
+      LIMIT 1
+    `).get();
+    assert.ok(master);
+
+    let orderId;
+    let rcvNumber;
+    let reqNumber;
+
+    try {
+      const orderResp = await apiFetch(`${baseUrl}/api/admin/pending-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          buyer: master.buyer,
+          maker: 'Alteration Maker',
+          po: `PO-ALT-${randomUUID()}`,
+          article: master.article,
+          sizes: { '7': 10, '8': 10, '9': 10, '10': 10, '11': 10 },
+          totalQty: 50
+        })
+      });
+      assert.equal(orderResp.status, 200);
+      orderId = (await orderResp.json()).data.orderId;
+
+      const grnResp = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          makerContractor: 'Alteration Maker',
+          receivedFrom: 'Driver Alt',
+          strictInwardEntry: true,
+          sizes: { '7': 10, '8': 10, '9': 10, '10': 10, '11': 10 },
+          rcvdPairs: 50
+        })
+      }, inwardCookie);
+      assert.equal(grnResp.status, 200);
+      rcvNumber = (await grnResp.json()).data.rcv_number;
+
+      const reqResp = await apiFetch(`${baseUrl}/api/orders/${orderId}/requisitions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sizes: { '7': 10, '8': 10, '9': 10, '10': 10, '11': 10 } })
+      }, packingCookie);
+      assert.equal(reqResp.status, 200);
+      reqNumber = (await reqResp.json()).data.reqNumber;
+
+      const issueResp = await apiFetch(`${baseUrl}/api/orders/${orderId}/issue-req`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reqNumber, requestedPairs: 50 })
+      }, inwardCookie);
+      assert.equal(issueResp.status, 200);
+
+      // Packing supervisor logs 40 good and 10 defective pairs in Stage 1
+      const s1Resp = await apiFetch(`${baseUrl}/api/wip/${reqNumber}/step1-checking`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goodPairs: 40, defectPairs: 10, defectReason: 'Stitching Skip' })
+      }, packingCookie);
+      assert.equal(s1Resp.status, 200);
+
+      // Inward Clerk reads /api/alterations (200) and sees the 10-pair pending ticket
+      const altListResp = await apiFetch(`${baseUrl}/api/alterations?reqNo=${encodeURIComponent(reqNumber)}`, {}, inwardCookie);
+      assert.equal(altListResp.status, 200);
+      const altList = (await altListResp.json()).data;
+      const openAlt = altList.find(a => a.req_number === reqNumber && a.status === 'SENT_FOR_ALTERATION');
+      assert.ok(openAlt);
+      assert.equal(openAlt.pairs_count, 10);
+
+      // Inward Clerk returns 4 pairs first (partial repair back to Stage 1)
+      const partialResp = await apiFetch(`${baseUrl}/api/alterations/${openAlt.id}/repair`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tailorName: 'Tailor Rashid', isScrap: false, pairsCount: 4 })
+      }, inwardCookie);
+      assert.equal(partialResp.status, 200);
+      assert.equal((await partialResp.json()).data.pairsCount, 4);
+
+      let reqAfter = (await (await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}`)).json()).data;
+      assert.equal(reqAfter.wip.step1_checking_in, 54);
+      const remainingOpen = reqAfter.alterations.find(a => a.id === openAlt.id);
+      assert.equal(remainingOpen.status, 'SENT_FOR_ALTERATION');
+      assert.equal(remainingOpen.pairs_count, 6);
+
+      // Inward Clerk returns the remaining 6 pairs to Stage 1
+      const finalResp = await apiFetch(`${baseUrl}/api/alterations/${openAlt.id}/repair`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tailorName: 'Tailor Rashid', isScrap: false })
+      }, inwardCookie);
+      assert.equal(finalResp.status, 200);
+      assert.equal((await finalResp.json()).data.pairsCount, 6);
+
+      reqAfter = (await (await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}`)).json()).data;
+      assert.equal(reqAfter.wip.step1_checking_in, 60);
+      assert.equal(reqAfter.alterations.filter(a => a.status === 'SENT_FOR_ALTERATION').length, 0);
+    } finally {
+      if (reqNumber) {
+        db.prepare('DELETE FROM scrap_ledger WHERE req_number = ?').run(reqNumber);
+        db.prepare('DELETE FROM alterations WHERE req_number = ?').run(reqNumber);
+        db.prepare('DELETE FROM packing_wip WHERE req_number = ?').run(reqNumber);
+        db.prepare('DELETE FROM grn_req_allocations WHERE req_number = ?').run(reqNumber);
+        db.prepare('DELETE FROM glove_requisitions WHERE req_number = ?').run(reqNumber);
+      }
+      if (rcvNumber) {
+        db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNumber);
+      }
+      if (orderId) {
+        db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(orderId);
+        db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(orderId);
+      }
+    }
+  });
+
+  test('API Hall -> Stitcher Chain CRUD, RBAC 403, Validation, and Inward Receiving', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const hallCName = `Hall C-${suffix}`;
+    const hallDName = `Hall D-${suffix}`;
+    let hallCId;
+    let hallDId;
+    let stitcherBilalId;
+    let stitcherKamranId;
+    let altUserId;
+    let altSessionToken;
+    const rcvNumbers = [];
+
+    try {
+      const altUser = AuthService.createUser({
+        name: 'HTTP Alteration Lead',
+        username: `http-alt-${suffix}`,
+        password: `Test-${suffix}-Pass`,
+        role: 'ALTERATION_LEAD',
+        station: 'Alteration Bay'
+      });
+      altUserId = altUser.userId;
+      const altSession = AuthService.createSession(altUserId);
+      altSessionToken = altSession.token;
+      const altCookie = `mes_session=${altSessionToken}`;
+
+      // Non-Super-User roles cannot create halls or stitchers (403)
+      for (const badCookie of [inwardCookie, packingCookie, altCookie]) {
+        const denyHall = await apiFetch(`${baseUrl}/api/admin/halls`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Unauthorized Hall' })
+        }, badCookie);
+        assert.equal(denyHall.status, 403);
+      }
+
+      // Create Hall C & duplicate NOCASE rejection (409)
+      const createHallC = await apiFetch(`${baseUrl}/api/admin/halls`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: hallCName })
+      });
+      assert.equal(createHallC.status, 200);
+      hallCId = (await createHallC.json()).data.id;
+
+      const dupHallC = await apiFetch(`${baseUrl}/api/admin/halls`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: hallCName.toLowerCase() })
+      });
+      assert.equal(dupHallC.status, 409);
+
+      const createHallD = await apiFetch(`${baseUrl}/api/admin/halls`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: hallDName })
+      });
+      assert.equal(createHallD.status, 200);
+      hallDId = (await createHallD.json()).data.id;
+
+      // Add Stitchers to Hall C & Hall D + duplicate stitcher check
+      const addBilal = await apiFetch(`${baseUrl}/api/admin/halls/${hallCId}/stitchers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Ustad Bilal' })
+      });
+      assert.equal(addBilal.status, 200);
+      stitcherBilalId = (await addBilal.json()).data.id;
+
+      const dupBilal = await apiFetch(`${baseUrl}/api/admin/halls/${hallCId}/stitchers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'ustad bilal' })
+      });
+      assert.equal(dupBilal.status, 409);
+
+      const addKamran = await apiFetch(`${baseUrl}/api/admin/halls/${hallCId}/stitchers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Ustad Kamran' })
+      });
+      assert.equal(addKamran.status, 200);
+      stitcherKamranId = (await addKamran.json()).data.id;
+
+      const addZahid = await apiFetch(`${baseUrl}/api/admin/halls/${hallDId}/stitchers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Ustad Zahid' })
+      });
+      assert.equal(addZahid.status, 200);
+
+      // GET /api/store/dropdowns allowed for INWARD_CLERK and ALTERATION_LEAD
+      for (const okCookie of [adminCookie, inwardCookie, altCookie]) {
+        const ddRes = await apiFetch(`${baseUrl}/api/store/dropdowns`, {}, okCookie);
+        assert.equal(ddRes.status, 200);
+        const ddJson = await ddRes.json();
+        const foundHallC = ddJson.data.halls.find(h => h.id === hallCId);
+        assert.ok(foundHallC);
+        assert.deepEqual(
+          foundHallC.stitchers.map(s => s.name),
+          ['Ustad Bilal', 'Ustad Kamran']
+        );
+      }
+
+      // Chain validation failures (400)
+      const stitcherNoHall = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          makerContractor: 'Maker A',
+          stitcherName: 'Ustad Bilal',
+          articleName: 'Model A1',
+          receivedFrom: 'Driver',
+          strictInwardEntry: true,
+          rcvdPairs: 10
+        })
+      }, inwardCookie);
+      assert.equal(stitcherNoHall.status, 400);
+
+      const hallNoStitcher = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hallName: hallCName,
+          articleName: 'Model A1',
+          strictInwardEntry: true,
+          rcvdPairs: 10
+        })
+      }, inwardCookie);
+      assert.equal(hallNoStitcher.status, 400);
+
+      const crossHallStitcher = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hallName: hallCName,
+          stitcherName: 'Ustad Zahid',
+          articleName: 'Model A1',
+          strictInwardEntry: true,
+          rcvdPairs: 10
+        })
+      }, inwardCookie);
+      assert.equal(crossHallStitcher.status, 400);
+
+      const externalNoPerson = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          makerContractor: 'Maker A',
+          articleName: 'Model A1',
+          strictInwardEntry: true,
+          rcvdPairs: 10
+        })
+      }, inwardCookie);
+      assert.equal(externalNoPerson.status, 400);
+
+      // Valid Hall -> Stitcher receipt without receivedFrom defaults to "Stitcher (Hall)"
+      const rcvAutoFrom = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hallName: hallCName,
+          stitcherName: 'Ustad Bilal',
+          articleName: 'Model A1',
+          strictInwardEntry: true,
+          rcvdPairs: 40,
+          sizes: [{ sizeCode: '7', orderPairs: 40, rcvdPairs: 40 }]
+        })
+      }, inwardCookie);
+      assert.equal(rcvAutoFrom.status, 200);
+      const rcv1 = (await rcvAutoFrom.json()).data;
+      rcvNumbers.push(rcv1.rcv_number);
+      assert.equal(rcv1.hall_name, hallCName);
+      assert.equal(rcv1.stitcher_name, 'Ustad Bilal');
+      assert.equal(rcv1.received_from, `Ustad Bilal (${hallCName})`);
+      assert.equal(rcv1.receiving_note, '');
+
+      // Valid Hall -> Stitcher receipt with custom Courier / Note
+      const rcvWithNote = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hallName: hallCName,
+          stitcherName: 'Ustad Kamran',
+          receivedFrom: 'Courier Salman',
+          receivingNote: 'Courier Salman',
+          articleName: 'Model A1',
+          strictInwardEntry: true,
+          rcvdPairs: 25
+        })
+      }, inwardCookie);
+      assert.equal(rcvWithNote.status, 200);
+      const rcv2 = (await rcvWithNote.json()).data;
+      rcvNumbers.push(rcv2.rcv_number);
+      assert.equal(rcv2.received_from, 'Courier Salman');
+      assert.equal(rcv2.receiving_note, 'Courier Salman');
+
+      // Search receivings by stitcher / note
+      const searchRes = await apiFetch(`${baseUrl}/api/store/receivings?search=Kamran`, {}, inwardCookie);
+      assert.equal(searchRes.status, 200);
+      const searchRows = (await searchRes.json()).data;
+      assert.ok(searchRows.some(r => r.rcv_number === rcv2.rcv_number));
+
+      // Delete individual stitcher & cascade delete halls
+      const delKamran = await apiFetch(`${baseUrl}/api/admin/stitchers/${stitcherKamranId}`, { method: 'DELETE' });
+      assert.equal(delKamran.status, 200);
+      stitcherKamranId = null;
+
+      const delHallC = await apiFetch(`${baseUrl}/api/admin/halls/${hallCId}`, { method: 'DELETE' });
+      assert.equal(delHallC.status, 200);
+      const remainingStitchers = db.prepare('SELECT COUNT(*) AS cnt FROM stitchers WHERE hall_id = ?').get(hallCId).cnt;
+      assert.equal(remainingStitchers, 0);
+      hallCId = null;
+    } finally {
+      for (const rcvNo of rcvNumbers) {
+        db.prepare('DELETE FROM receiving_size_breakdowns WHERE rcv_number = ?').run(rcvNo);
+        db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNo);
+      }
+      if (stitcherKamranId) db.prepare('DELETE FROM stitchers WHERE id = ?').run(stitcherKamranId);
+      if (stitcherBilalId) db.prepare('DELETE FROM stitchers WHERE id = ?').run(stitcherBilalId);
+      if (hallCId) db.prepare('DELETE FROM halls WHERE id = ?').run(hallCId);
+      if (hallDId) db.prepare('DELETE FROM halls WHERE id = ?').run(hallDId);
+      if (altSessionToken) AuthService.destroySession(altSessionToken);
+      if (altUserId) AuthService.deleteUser(altUserId);
+    }
+  });
+
+  test('API Multi-Article Sub-Orders & Per-Size Unclaimed Dock Stock: batch creation + per-size dock deduction', async () => {
+    const prods = db.prepare(`
+      SELECT p.id, p.name, p.customer_id, p.size_format, p.color_spec, c.name AS buyer_name
+      FROM products p
+      JOIN customers c ON c.id = p.customer_id
+      WHERE c.name = 'OXFORD'
+      ORDER BY p.id ASC
+      LIMIT 2
+    `).all();
+    assert.ok(prods.length >= 2, 'Expected at least 2 OXFORD catalog articles for multi-article test');
+
+    const [p1, p2] = prods;
+    const p1Codes = JSON.parse(db.prepare(`SELECT sizes_json FROM size_standards WHERE code = ?`).get(p1.size_format).sizes_json);
+    const p2Codes = JSON.parse(db.prepare(`SELECT sizes_json FROM size_standards WHERE code = ?`).get(p2.size_format).sizes_json);
+    const sizes1 = Object.fromEntries(p1Codes.map((c, i) => [c, i === 0 ? 50 : i === 1 ? 30 : 0]));
+    const sizes2 = Object.fromEntries(p2Codes.map((c, i) => [c, i === 0 ? 40 : 0]));
+
+    let createdOrderIds = [];
+    let rcvNumber = null;
+    let reqNumber = null;
+    try {
+      const batchResp = await apiFetch(`${baseUrl}/api/admin/pending-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: p1.customer_id,
+          buyer: p1.buyer_name,
+          po: 'PO-MULTI-API-01',
+          dueDate: '2026-12-15',
+          maker: 'Hall A',
+          items: [
+            {
+              productId: p1.id,
+              article: p1.name,
+              color: p1.color_spec || 'Black',
+              sizeFormat: p1.size_format,
+              sizes: sizes1
+            },
+            {
+              productId: p2.id,
+              article: p2.name,
+              color: p2.color_spec || 'White',
+              sizeFormat: p2.size_format,
+              maker: 'Hall B',
+              sizes: sizes2
+            }
+          ]
+        })
+      });
+      assert.equal(batchResp.status, 200);
+      const batchJson = await batchResp.json();
+      assert.equal(batchJson.success, true);
+      assert.equal(batchJson.data.orderIds.length, 2);
+      createdOrderIds = batchJson.data.orderIds;
+      assert.match(batchJson.data.baseOrderId, /^ORD-\d{4}-\d{3}$/);
+      assert.equal(createdOrderIds[0], `${batchJson.data.baseOrderId}-1`);
+      assert.equal(createdOrderIds[1], `${batchJson.data.baseOrderId}-2`);
+
+      const sub1 = batchJson.data.orders.find(o => o.orderId === createdOrderIds[0]);
+      const sub2 = batchJson.data.orders.find(o => o.orderId === createdOrderIds[1]);
+      assert.equal(sub1.maker, 'Hall A');
+      assert.equal(sub2.maker, 'Hall B');
+      assert.equal(sub1.unclaimedDockPairs, 0);
+      assert.equal(sub2.unclaimedDockPairs, 0);
+
+      // Receive 35 pairs on sub1 (25 + 10) at Inward Dock
+      const rcvResp = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: createdOrderIds[0],
+          makerContractor: 'Hall A',
+          receivedFrom: 'Driver Raza',
+          customerName: p1.buyer_name,
+          poNumber: 'PO-MULTI-API-01',
+          articleName: p1.name,
+          colorShade: p1.color_spec || 'Black',
+          orderQty: 80,
+          rcvdPairs: 35,
+          sizes: [
+            { sizeCode: p1Codes[0], orderPairs: 50, rcvdPairs: 25 },
+            { sizeCode: p1Codes[1], orderPairs: 30, rcvdPairs: 10 }
+          ]
+        })
+      });
+      assert.equal(rcvResp.status, 200);
+      rcvNumber = (await rcvResp.json()).data.rcv_number;
+
+      // Create REQ for 15 of p1Codes[0] -> leaves 10 of p1Codes[0] & 10 of p1Codes[1] unclaimed
+      const reqSizes = Object.fromEntries(p1Codes.map((c, i) => [c, i === 0 ? 15 : 0]));
+      const reqResp = await apiFetch(`${baseUrl}/api/orders/${createdOrderIds[0]}/requisitions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sizes: reqSizes })
+      });
+      assert.equal(reqResp.status, 200);
+      reqNumber = (await reqResp.json()).data.reqNumber;
+
+      const listOrdersResp = await apiFetch(`${baseUrl}/api/admin/pending-orders`);
+      const listOrders = (await listOrdersResp.json()).data;
+      const updatedSub1 = listOrders.find(o => o.orderId === createdOrderIds[0]);
+      assert.equal(updatedSub1.unclaimedDockPairs, 20);
+      assert.equal(updatedSub1.unclaimedDockSizes[p1Codes[0]], 10);
+      assert.equal(updatedSub1.unclaimedDockSizes[p1Codes[1]], 10);
+    } finally {
+      if (reqNumber) {
+        db.prepare('DELETE FROM packing_wip WHERE req_number = ?').run(reqNumber);
+        db.prepare('DELETE FROM glove_requisitions WHERE req_number = ?').run(reqNumber);
+      }
+      if (rcvNumber) {
+        db.prepare('DELETE FROM receiving_size_breakdowns WHERE rcv_number = ?').run(rcvNumber);
+        db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNumber);
+      }
+      for (const oid of createdOrderIds) {
+        db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(oid);
+        db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(oid);
+      }
+    }
+  });
+
+  test('API RBAC & Guardrails: PUT /api/admin/pending-orders/:orderId requires SUPER_USER, enforces received floors, recalculates GRN balance, and audits', async () => {
+    const master = db.prepare(`
+      SELECT c.id AS customer_id, c.name AS buyer, p.id AS product_id, p.name AS article
+      FROM customers c JOIN products p ON p.customer_id = c.id
+      LIMIT 1
+    `).get();
+    assert.ok(master);
+
+    let orderId;
+    let rcvNumber;
+    const prevOrders = db.prepare('SELECT order_id FROM pending_orders').all().map(r => r.order_id);
+    try {
+      const orderResp = await apiFetch(`${baseUrl}/api/admin/pending-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: master.customer_id,
+          productId: master.product_id,
+          buyer: master.buyer,
+          maker: 'Hall A',
+          po: 'PO-EDIT-001',
+          article: master.article,
+          color: 'Black',
+          dueDate: '2026-12-01',
+          sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+          totalQty: 200
+        })
+      });
+      assert.equal(orderResp.status, 200);
+      orderId = (await orderResp.json()).data.orderId;
+
+      // Receive 80 pairs on size 7 for Hall A (balance starts at 120)
+      const grnResp = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rcvDate: '23-11-2026',
+          orderId,
+          makerContractor: 'Hall A',
+          receivedFrom: 'Driver Tariq',
+          strictInwardEntry: true,
+          orderQty: 200,
+          rcvdPairs: 80,
+          sizes: [{ sizeCode: '7', orderPairs: 40, rcvdPairs: 80 }]
+        })
+      }, inwardCookie);
+      assert.equal(grnResp.status, 200);
+      rcvNumber = (await grnResp.json()).data.rcv_number;
+
+      // 1. Non-Super-User roles (INWARD_CLERK & PACKING_SUPERVISOR) must get 403
+      const clerkDeny = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dueDate: '2026-12-10',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 }
+        })
+      }, inwardCookie);
+      assert.equal(clerkDeny.status, 403);
+
+      const packingDeny = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dueDate: '2026-12-10',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 }
+        })
+      }, packingCookie);
+      assert.equal(packingDeny.status, 403);
+
+      // 1b. Missing or incorrect Admin password must return 400 / 401
+      const missingPwdFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dueDate: '2026-12-10',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 }
+        })
+      });
+      assert.equal(missingPwdFail.status, 400);
+
+      const wrongPwdFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword: 'Wrong-Admin-Password',
+          dueDate: '2026-12-10',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 }
+        })
+      });
+      assert.equal(wrongPwdFail.status, 401);
+
+      // 2. Super User shrink below already-received size 7 (80 prs) or total (80 prs) must return 400
+      const shrinkSizeFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          sizes: { '7': 50, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [{ maker: 'Hall A', sizes: { '7': 50, '8': 40, '9': 40, '10': 40, '11': 40 } }]
+        })
+      });
+      assert.equal(shrinkSizeFail.status, 400);
+
+      // 3. Super User shrink contractor allocation below already-received pairs (80 prs) must return 400
+      const shrinkMakerFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [
+            { maker: 'Hall A', sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 } },
+            { maker: 'Hall B', sizes: { '7': 30, '8': 40, '9': 40, '10': 40, '11': 40 } }
+          ]
+        })
+      });
+      assert.equal(shrinkMakerFail.status, 400);
+
+      // 3b. Removing contractor who already has received stock (80 prs from Hall A) must return 400
+      const removeMakerFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [
+            { maker: 'Hall B', sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 } }
+          ]
+        })
+      });
+      assert.equal(removeMakerFail.status, 400);
+
+      // 3c. Swapping Size 7 from Hall A to Hall B below Hall A's 80 received pairs on Size 7 must return 400
+      const swapSizeBetweenMakersFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [
+            { maker: 'Hall A', sizes: { '7': 40, '8': 40, '9': 0, '10': 0, '11': 0 } },
+            { maker: 'Hall B', sizes: { '7': 40, '8': 0, '9': 40, '10': 40, '11': 40 } }
+          ]
+        })
+      });
+      assert.equal(swapSizeBetweenMakersFail.status, 400);
+
+      // 4. Valid Super User edit (increase 200 -> 260, split Hall A 140 + Hall B 120, move due date) succeeds, recalculates GRN balance, and audits
+      const validEdit = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword,
+          po: 'PO-EDIT-REV2',
+          color: 'Midnight Black',
+          dueDate: '2026-12-15',
+          reason: 'Buyer added 60 pairs on size 7',
+          sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 },
+          allocations: [
+            { maker: 'Hall A', sizes: { '7': 100, '8': 40, '9': 0, '10': 0, '11': 0 }, dueDate: '2026-12-15' },
+            { maker: 'Hall B', sizes: { '7': 0, '8': 0, '9': 40, '10': 40, '11': 40 }, dueDate: '2026-12-15' }
+          ]
+        })
+      });
+      assert.equal(validEdit.status, 200);
+      const editJson = await validEdit.json();
+      assert.equal(editJson.success, true);
+      const updatedOrd = editJson.data.orders.find(o => o.orderId === orderId);
+      assert.ok(updatedOrd);
+      assert.equal(updatedOrd.totalQty, 260);
+      assert.equal(updatedOrd.dueDate, '2026-12-15');
+      assert.equal(updatedOrd.po, 'PO-EDIT-REV2');
+
+      const rcvAfter = db.prepare('SELECT order_qty, balance_qty FROM store_receivings WHERE rcv_number = ?').get(rcvNumber);
+      assert.equal(rcvAfter.order_qty, 260);
+      assert.equal(rcvAfter.balance_qty, 180);
+
+      const auditEntry = db.prepare(`SELECT action, after_summary, reason FROM audit_trail WHERE entity_id = ? AND action = 'ORDER_ADJUST'`).get(orderId);
+      assert.ok(auditEntry);
+      assert.match(auditEntry.after_summary, /260 Prs/);
+      assert.equal(auditEntry.reason, 'Buyer added 60 pairs on size 7');
+    } finally {
+      if (rcvNumber) {
+        db.prepare('DELETE FROM receiving_size_breakdowns WHERE rcv_number = ?').run(rcvNumber);
+        db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNumber);
+      }
+      if (orderId && !prevOrders.includes(orderId)) {
         db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(orderId);
         db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(orderId);
       }

@@ -1001,4 +1001,1823 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     expect(runtimeErrors).toEqual([]);
   });
+
+  test('Catalog cascading Buyer -> Article -> Color -> Dynamic Sizes (GENRAL & IXS MEN) with split allocation & reload persistence', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) {
+        runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+      }
+    });
+
+    await authenticateAsSuperUser(page);
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+
+    // 1. Selecting OXFORD filters articles to OXFORD catalog & switches size grid to GENRAL (9 sizes)
+    await page.selectOption('#admin-pending-order-buyer', 'OXFORD');
+    const oxfordArticleOptions = await page.locator('#admin-pending-order-article option').allTextContents();
+    expect(oxfordArticleOptions.length).toBeGreaterThan(2);
+    expect(oxfordArticleOptions.some(t => t.includes('BRISBANE AIR MS TECH GREY/BLACK'))).toBe(true);
+    expect(oxfordArticleOptions.some(t => t.includes('G-175102-BK 132 RED'))).toBe(false);
+
+    await page.selectOption('#admin-pending-order-article', 'BRISBANE AIR MS TECH GREY/BLACK');
+    await expect(page.locator('.su-order-matrix-header')).toContainText('Scale: GENRAL, 9 Sizes');
+    await expect(page.locator('.admin-order-size-val')).toHaveCount(9);
+    await expect(page.locator('.admin-order-size-val[data-size="XS"]')).toBeVisible();
+    await expect(page.locator('.admin-order-size-val[data-size="5XL"]')).toBeVisible();
+    await expect(page.locator('.admin-order-size-val[data-size="7"]')).toHaveCount(0);
+
+    // 2. Switching Buyer to BERIK filters to BERIK & auto-fills combined colorway + IXS MEN (10 sizes)
+    await page.selectOption('#admin-pending-order-buyer', 'BERIK');
+    const berikArticleOptions = await page.locator('#admin-pending-order-article option').allTextContents();
+    expect(berikArticleOptions.some(t => t.includes('G-175102-BK 132 RED'))).toBe(true);
+    expect(berikArticleOptions.some(t => t.includes('BRISBANE AIR MS TECH GREY/BLACK'))).toBe(false);
+
+    await page.selectOption('#admin-pending-order-article', 'G-175102-BK 132 RED');
+    await expect(page.locator('#admin-pending-order-color')).toHaveValue('Black,Red,White');
+    await expect(page.locator('.su-order-matrix-header')).toContainText('Scale: IXS MEN, 10 Sizes');
+    await expect(page.locator('.admin-order-size-val')).toHaveCount(10);
+
+    // 3. Enter dynamic IXS MEN quantities + split across 2 contractors -> verify 100% balance
+    await page.fill('#admin-pending-order-po', 'PO-CASCADE-IXS');
+    await page.fill('.admin-order-size-val[data-size="2XS"]', '10');
+    await page.fill('.admin-order-size-val[data-size="XS"]', '20');
+    await page.fill('.admin-order-size-val[data-size="M"]', '30');
+    await expect(page.locator('#admin-order-size-total')).toHaveText('60');
+
+    await page.click('#btn-admin-toggle-split');
+    await expect(page.locator('[data-testid="admin-contractor-split-panel"]')).toBeVisible();
+
+    const splitMaker0 = page.locator('.admin-split-maker[data-split-index="0"]');
+    const splitMaker1 = page.locator('.admin-split-maker[data-split-index="1"]');
+    await splitMaker0.selectOption({ index: 1 });
+    await splitMaker1.selectOption({ index: 2 });
+
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="2XS"]', '10');
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="XS"]', '20');
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="M"]', '0');
+    await page.fill('.admin-split-size-val[data-split-index="1"][data-size="M"]', '30');
+    await expect(page.locator('#admin-split-balance-bar')).toContainText('Split Matches Order 100%');
+
+    // 4. Desktop (1440px) & Mobile (375px) zero horizontal page overflow check with 10-column split grid
+    const overflow1440 = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+    expect(overflow1440).toBe(false);
+    await page.setViewportSize({ width: 375, height: 812 });
+    const overflow375 = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+    expect(overflow375).toBe(false);
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // 5. Save Master Order & verify table display + SQLite reload persistence
+    await page.click('#btn-admin-add-pending-order');
+    const ordersTable = page.locator('[data-testid="superuser-command-center"] table.data-table').first();
+    const savedRow = ordersTable.locator('tr', { hasText: 'PO-CASCADE-IXS' });
+    await expect(savedRow).toContainText('BERIK');
+    await expect(savedRow).toContainText('G-175102-BK 132 RED');
+    await expect(savedRow).toContainText('Black,Red,White');
+    await expect(savedRow).toContainText('IXS MEN');
+    await expect(savedRow).toContainText('2XS:10');
+    await expect(savedRow).toContainText('XS:20');
+    await expect(savedRow).toContainText('M:30');
+    await expect(savedRow).toContainText('60');
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    const reloadedRow = page.locator('[data-testid="superuser-command-center"] table.data-table').first().locator('tr', { hasText: 'PO-CASCADE-IXS' });
+    await expect(reloadedRow).toContainText('IXS MEN');
+    await expect(reloadedRow).toContainText('2XS:10');
+    await expect(reloadedRow).toContainText('M:30');
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Slice 3: Non-legacy IXS MEN order flows through Inward GRN -> Packing REQ -> Issue -> Monochrome Slips -> Reload', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) {
+        runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+      }
+    });
+
+    await page.addInitScript(() => {
+      window.print = () => {};
+    });
+
+    await authenticateAsSuperUser(page);
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+
+    // Create BERIK IXS MEN order
+    await page.selectOption('#admin-pending-order-buyer', 'BERIK');
+    await page.selectOption('#admin-pending-order-article', 'G-175102-BK 132 RED');
+    await page.selectOption('#admin-pending-order-maker', { index: 1 });
+    await page.fill('#admin-pending-order-po', 'PO-SLICE3-IXS');
+    await page.fill('.admin-order-size-val[data-size="2XS"]', '15');
+    await page.fill('.admin-order-size-val[data-size="XS"]', '25');
+    await page.fill('.admin-order-size-val[data-size="M"]', '20');
+    await page.click('#btn-admin-add-pending-order');
+
+    const createdDeleteBtn = page.locator('button[data-su-action="remove-pending-order"]').first();
+    await expect(createdDeleteBtn).toBeVisible();
+    const orderId = (await createdDeleteBtn.getAttribute('data-order-id'))!;
+
+    // Navigate to Dock #1 via + Receive GRN Batch
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+
+    await expect(page.locator('#grn-article')).toHaveValue('G-175102-BK 132 RED');
+    await expect(page.locator('#grn-color')).toHaveValue('Black,Red,White');
+    await expect(page.locator('.grn-size-val')).toHaveCount(10);
+    await expect(page.locator('.grn-size-val[data-size="2XS"]')).toHaveValue('15');
+    await expect(page.locator('.grn-size-val[data-size="XS"]')).toHaveValue('25');
+    await expect(page.locator('.grn-size-val[data-size="M"]')).toHaveValue('20');
+    await expect(page.locator('.grn-size-val[data-size="7"]')).toHaveCount(0);
+
+    await page.fill('#grn-received-from', 'Tariq Carrier');
+    await page.click('#btn-print-grn-slip');
+
+    // Verify monochrome GRN receiving slip uses IXS MEN columns & hides Buyer
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await expect(page.locator('#modal-body')).toContainText('Scale: IXS MEN');
+    await expect(page.locator('#modal-body')).toContainText('2XS');
+    await expect(page.locator('#modal-body')).toContainText('5XL');
+    await expect(page.locator('#modal-body')).toContainText('Black,Red,White');
+    await expect(page.locator('#modal-body')).toContainText('60 Pairs');
+    await expect(page.locator('#modal-body')).not.toContainText('BERIK');
+    await expect(page.locator('#modal-body')).not.toContainText('7 / S');
+    await page.click('#modal-btn-close');
+
+    // Store Register table renders dynamic IXS MEN GRN sizes
+    await expect(page.locator('table.data-table')).toContainText('IXS MEN');
+    await expect(page.locator('table.data-table')).toContainText('2XS:15');
+
+    // Navigate to Packing Hall & create REQ on IXS MEN scale
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-create-req"][data-order-id="${orderId}"]`);
+
+    await expect(page.locator('#new-req-size-matrix-container')).toContainText('Scale: IXS MEN, 10 Sizes');
+    await expect(page.locator('.req-size-val')).toHaveCount(10);
+    await expect(page.locator('.req-size-val[data-size="2XS"]')).toHaveValue('15');
+    await expect(page.locator('#new-req-pairs')).toHaveValue('60');
+
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes(`/api/orders/${encodeURIComponent(orderId)}/requisitions`) && res.status() === 200),
+      page.click('#btn-confirm-lot-draw')
+    ]);
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+    await expect(page.locator('[data-testid="wip-analytics-dashboard"]')).toContainText('Size 2XS');
+    await expect(page.locator('[data-testid="wip-analytics-dashboard"]')).toContainText('Size M');
+
+    // Return to Dock #1 & Issue REQ to Packing Hall
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+    await expect(page.locator('#main-content')).toContainText('2XS:15');
+    await expect(page.locator('#btn-issue-req-to-packing')).toBeEnabled();
+    await page.click('#btn-issue-req-to-packing');
+
+    // Verify monochrome Packing Requisition slip renders IXS MEN sizes cleanly
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await expect(page.locator('#modal-body')).toContainText('Scale: IXS MEN');
+    await expect(page.locator('#modal-body')).toContainText('2XS');
+    await expect(page.locator('#modal-body')).toContainText('5XL');
+    await expect(page.locator('#modal-body')).toContainText('60 Pairs');
+    await expect(page.locator('#modal-body')).not.toContainText('7 / S');
+    await page.click('#modal-btn-close');
+
+    // Viewport overflow checks at 1440px and 375px on GRN screen with 10-column size matrix
+    const overflow1440 = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+    expect(overflow1440).toBe(false);
+    await page.setViewportSize({ width: 375, height: 812 });
+    const overflow375 = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+    expect(overflow375).toBe(false);
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Reload persistence check in Super User Live Tracking
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    const orderCard = page.locator(`#tracking-order-card-${orderId}`);
+    await expect(orderCard).toContainText('IXS MEN');
+    await expect(orderCard).toContainText('2XS:15');
+    await expect(orderCard).toContainText('XS:25');
+    await expect(orderCard).toContainText('M:20');
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Receiving Hall: Receive button, Option B multi-contractor split, confirmation popup with Print first, and live DD-MM-YYYY date', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) {
+        runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+      }
+    });
+
+    let printPopupOpened = false;
+    page.on('popup', () => {
+      printPopupOpened = true;
+    });
+
+    await authenticateAsSuperUser(page);
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+
+    // Create a split Master Order across 2 contractors (60 + 40 = 100 Prs)
+    await page.selectOption('#admin-pending-order-article', 'Model A1');
+    await page.fill('#admin-pending-order-po', 'PO-SPLIT-OPTION-B');
+    await page.fill('.admin-order-size-val[data-size="7"]', '60');
+    await page.fill('.admin-order-size-val[data-size="8"]', '40');
+    await page.click('#btn-admin-toggle-split');
+
+    const m1Val = await page.locator('.admin-split-maker[data-split-index="0"]').inputValue();
+    const m2Val = await page.locator('.admin-split-maker[data-split-index="1"]').inputValue();
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="7"]', '60');
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="8"]', '0');
+    await page.fill('.admin-split-size-val[data-split-index="1"][data-size="8"]', '40');
+    await page.click('#btn-admin-add-pending-order');
+
+    const createdDeleteBtn = page.locator('button[data-su-action="remove-pending-order"]').first();
+    await expect(createdDeleteBtn).toBeVisible();
+    const orderId = (await createdDeleteBtn.getAttribute('data-order-id'))!;
+
+    // Compute today's expected DD-MM-YYYY date in browser context
+    const expectedTodayDate = await page.evaluate(() => {
+      const now = new Date();
+      const dd = String(now.getDate()).padStart(2, '0');
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      return `${dd}-${mm}-${now.getFullYear()}`;
+    });
+
+    // Jump to Receiving Hall via + Receive GRN Batch
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+
+    // Verify 1) Receive button label, 3) Live DD-MM-YYYY date in header, and 2) Option B split table renders all contractors together
+    await expect(page.locator('#btn-print-grn-slip')).toHaveText('Receive');
+    await expect(page.locator('.system-date-label')).toHaveText(`Date: ${expectedTodayDate}`);
+    await expect(page.locator('#grn-split-entry-table')).toBeVisible();
+    await expect(page.locator('#grn-split-entry-table')).toContainText(m1Val);
+    await expect(page.locator('#grn-split-entry-table')).toContainText(m2Val);
+
+    // Validation requires Received From when entering qty for a split contractor
+    await page.fill(`.grn-split-size-val[data-split-idx="0"][data-size="7"]`, '30');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('.grn-split-received-from[data-split-idx="0"]')).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+
+    // Enter both split contractors together in Option B (30 + 20 = 50 Pairs)
+    await page.fill('.grn-split-received-from[data-split-idx="0"]', 'Tariq Carrier');
+    await page.fill('.grn-split-received-from[data-split-idx="1"]', 'Imran Carrier');
+    await page.fill('.grn-split-size-val[data-split-idx="1"][data-size="8"]', '20');
+    await expect(page.locator('#grn-rcvd-pairs')).toHaveValue('50');
+
+    // Click Receive -> confirmation popup opens WITHOUT auto-printing, with Print button FIRST at the bottom
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    expect(printPopupOpened).toBe(false);
+
+    const confirmBox = page.locator('[data-testid="grn-receive-confirmation"]');
+    await expect(confirmBox).toBeVisible();
+    await expect(confirmBox).toContainText('50 Pairs');
+    await expect(confirmBox).toContainText('Tariq Carrier');
+    await expect(confirmBox).toContainText('Imran Carrier');
+    await expect(confirmBox).toContainText(expectedTodayDate);
+    await expect(confirmBox).toContainText(`Order Split Among: ${m1Val} (60 Prs), ${m2Val} (40 Prs)`);
+
+    const footerButtonIds = await page.locator('#global-modal .modal-footer button').evaluateAll(btns => btns.map(b => b.id));
+    expect(footerButtonIds[0]).toBe('modal-btn-print');
+    await expect(page.locator('#modal-btn-print')).toHaveText('Print');
+
+    // Clicking Print inside confirmation popup prints the slips
+    const [printPopup] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.click('#modal-btn-print')
+    ]);
+    await expect(printPopup.locator('.printable-slip-box')).toHaveCount(2);
+    await printPopup.close();
+    await page.click('#modal-btn-close');
+
+    // Store Register table displays live date and order split context for both saved rows
+    const storeTable = page.locator('table.data-table');
+    await expect(storeTable).toContainText(expectedTodayDate);
+    await expect(storeTable).toContainText(`Split: ${m1Val} (60 Prs), ${m2Val} (40 Prs)`);
+
+    // Viewport overflow checks at 1440px and 375px on Option B split table
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
+    await page.setViewportSize({ width: 375, height: 812 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Reload persistence verifies live date persisted into SQLite
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+    const reloadedFirstRow = page.locator('table.data-table tbody tr').first();
+    await expect(reloadedFirstRow).toContainText(expectedTodayDate);
+    await expect(reloadedFirstRow).not.toContainText('31-10-2026');
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Inward Clerk can open Alteration Bay and return defective pairs back to Stage 1 in SQLite', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) {
+        runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+      }
+    });
+
+    await authenticateAsSuperUser(page);
+
+    // 1. Create an Inward Clerk account
+    await page.click('.admin-tab-btn[data-admin-tab="users"]');
+    const inwardUser = 'e2e.inward.alt';
+    const inwardPass = 'Inward-Alt-Password-2026!';
+    await page.fill('#admin-user-name', 'Inward Alteration Clerk');
+    await page.fill('#admin-user-username', inwardUser);
+    await page.fill('#admin-user-password', inwardPass);
+    await page.selectOption('#admin-user-role', 'INWARD_CLERK');
+    await page.click('#btn-admin-add-system-user');
+    await expect(page.locator('.su-user-table')).toContainText(inwardUser);
+
+    // 2. Create 100-pair Order, receive GRN, draw & issue REQ, and send 10 defects at Stage 1
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await page.selectOption('#admin-pending-order-maker', 'Hall A');
+    await page.selectOption('#admin-pending-order-article', 'Model A1');
+    await page.fill('#admin-pending-order-po', 'PO-E2E-ALT-01');
+    await page.fill('.admin-order-size-val[data-size="7"]', '100');
+    await page.click('#btn-admin-add-pending-order');
+    const createdDeleteBtn = page.locator('button[data-su-action="remove-pending-order"]').first();
+    await expect(createdDeleteBtn).toBeVisible();
+    const orderId = (await createdDeleteBtn.getAttribute('data-order-id'))!;
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+    await page.fill('#grn-received-from', 'Alteration Driver');
+    await page.fill('.grn-size-val >> nth=0', '100');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-create-req"][data-order-id="${orderId}"]`);
+    await expect(page.locator('#btn-confirm-lot-draw')).toBeVisible();
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes(`/api/orders/${encodeURIComponent(orderId)}/requisitions`) && res.status() === 200),
+      page.click('#btn-confirm-lot-draw')
+    ]);
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+    await page.click('#btn-issue-req-to-packing');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.locator(`#tracking-order-card-${orderId} button[data-su-action="open-req-screen"][data-target-screen="screen-packing"]`).first().click();
+    await expect(page.locator('#wip-stg1-in')).toHaveText('100');
+
+    // Stage 1: Pass 90, send 10 to Alteration Bay
+    await page.click('#btn-wip-step1');
+    await page.fill('#step1-defect-input', '10');
+    await page.click('#btn-submit-step1-action');
+    await expect(page.locator('#wip-stg2-in')).toHaveText('90');
+    await expect(page.locator('#wip-stg1-in')).toHaveText('0');
+    await expect(page.locator('#btn-wip-step1')).toBeDisabled();
+
+    // 3. Sign out of Super User and sign in as Inward Clerk
+    await page.click('#btn-session-lock');
+    await expect(page.locator('h1#auth-title')).toContainText('Sign in');
+    await page.fill('#auth-username', inwardUser);
+    await page.fill('#auth-password', inwardPass);
+    await page.click('#auth-form button[type="submit"]');
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+
+    // Inward Clerk sees Alteration Bay toggle with 1 pending batch and can switch cleanly
+    const altNavBtn = page.locator('#btn-inward-nav-repair');
+    await expect(altNavBtn).toBeVisible();
+    await expect(altNavBtn).toContainText('Alteration Bay (1)');
+    await altNavBtn.click();
+    await expect(page.locator('.rep-title')).toContainText('Alteration and repair bay 2');
+    await expect(page.locator('#defect-article')).toHaveAttribute('data-locked', 'true');
+    await expect(page.locator('#defect-po')).toHaveAttribute('data-locked', 'true');
+    await expect(page.locator('#defect-color')).toHaveAttribute('data-locked', 'true');
+    await expect(page.locator('#defect-req-meta')).toContainText('10 pairs logged by packing hall');
+    await expect(page.locator('#defect-qty')).toHaveValue('10');
+    await expect(page.locator('#defect-qty')).toHaveAttribute('max', '10');
+    await expect(page.locator('#repair-active-bench-panel')).toContainText('10');
+
+    // Step 1: Assign 6 pairs to Tailor in SQLite -> appears in In rework panel
+    await page.fill('#defect-tailor', 'Master Tailor Khalid');
+    await page.fill('#defect-qty', '6');
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/alterations/assign') && res.status() === 200),
+      page.click('#btn-assign-tailor')
+    ]);
+    await expect(page.locator('#repair-active-bench-panel')).toContainText('Master Tailor Khalid');
+    await expect(page.locator('#repair-active-bench-panel')).toContainText('6');
+    await expect(page.locator('#repair-active-bench-panel')).toContainText('4');
+
+    // Step 2a: Inline partial Return (4) then Scrap remaining (2) on Khalid's 6-pair row
+    const khalidQtyInput = page.locator('#repair-active-bench-panel input.rep-row-qty[max="6"]');
+    await khalidQtyInput.fill('4');
+    await page.locator('#repair-active-bench-panel [data-alt-row-return][data-alt-tailor="Master Tailor Khalid"]').click();
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Returned to stage 1');
+
+    await page.locator('#repair-active-bench-panel [data-alt-row-scrap][data-alt-tailor="Master Tailor Khalid"]').click();
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Scrapped');
+
+    // Step 2b: Return remaining 4-pair row to Stage 1 -> Active dropdown clears, History toggle reveals past work across reload
+    await page.locator('#repair-active-bench-panel [data-alt-row-return]').first().click();
+    await expect(page.locator('#btn-inward-nav-repair')).toHaveText('Alteration Bay');
+    await expect(page.locator('.rep-req-pill')).toContainText('All active cleared');
+
+    await page.click('#btn-repair-toggle-all');
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Returned to stage 1');
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Scrapped');
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('#btn-inward-nav-repair');
+    await page.click('#btn-repair-toggle-all');
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Returned to stage 1');
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Scrapped');
+
+    // 4. Sign back in as Super User and verify Stage 1 input in Packing Hall increased to 8 (4 + 4 returned; 2 scrapped)
+    await page.click('#btn-session-lock');
+    await page.fill('#auth-username', TEST_ADMIN.username);
+    await page.fill('#auth-password', TEST_ADMIN.password);
+    await page.click('#auth-form button[type="submit"]');
+    await expect(page.locator('[data-testid="superuser-command-center"]')).toBeVisible();
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.locator(`#tracking-order-card-${orderId} button[data-su-action="open-req-screen"][data-target-screen="screen-packing"]`).first().click();
+    await expect(page.locator('#wip-stg1-in')).toHaveText('8');
+    await expect(page.locator('#btn-wip-step1')).toBeEnabled();
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Dashboard (.su-db) and Live Tracking (.su-lt) responsive layout, slip tags, and multi-viewport zero-overflow geometry', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) {
+        runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+      }
+    });
+
+    await authenticateAsSuperUser(page, '?demo=1');
+    await page.click('#btn-load-demo-600-inprogress');
+    await expect(page.locator('#btn-remove-demo-600')).toBeVisible();
+
+    // Verify new .su-db Dashboard styles, Row 4 .su-vg layout, negative color cascade, slip modal, and 1440/768/375px zero-overflow geometry
+    await expect(page.locator('.su-db [data-testid="su-pulse-cards-grid"]')).toBeVisible();
+    await expect(page.locator('.su-db [data-testid="su-exceptions-strip"]')).toBeVisible();
+    await expect(page.locator('.su-db #su-active-orders-pulse-section')).toBeVisible();
+    await expect(page.locator('.su-vg .su-vg-bar').first()).toBeVisible();
+    const vgCheck = await page.evaluate(() => {
+      const bar = document.querySelector<HTMLElement>('.su-vg .su-vg-bar');
+      const arrow = document.querySelector<SVGElement>('.su-vg .su-vg-arrow');
+      return {
+        barHeight: bar ? bar.getBoundingClientRect().height : 0,
+        arrowWidth: arrow ? arrow.getBoundingClientRect().width : 0
+      };
+    });
+    expect(vgCheck.barHeight).toBeGreaterThan(10);
+    expect(vgCheck.arrowWidth).toBeLessThanOrEqual(20);
+    const negColor = await page.locator('.su-db td.su-db-neg').first().evaluate(el => getComputedStyle(el).color);
+    expect(negColor).toBe('rgb(220, 38, 38)');
+    await page.locator('.su-db button.su-db-ref[data-su-action="open-slip"]').first().click();
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    for (const vp of [
+      { width: 1440, height: 900, expectVgCols: 2 },
+      { width: 768, height: 1024, expectVgCols: 1 },
+      { width: 375, height: 812, expectVgCols: 1 }
+    ]) {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      const dbGeom = await page.evaluate(() => {
+        const cw = document.documentElement.clientWidth;
+        const sw = document.documentElement.scrollWidth;
+        const vg = document.querySelector<HTMLElement>('.su-vg');
+        const vgCols = vg ? getComputedStyle(vg).gridTemplateColumns.trim().split(/\s+/).length : 0;
+        const offenders =
+          sw > cw
+            ? Array.from(document.querySelectorAll<HTMLElement>('.su-db *'))
+                .map(el => ({ tag: el.tagName, cls: String(el.className), right: Math.round(el.getBoundingClientRect().right) }))
+                .filter(x => x.right > cw + 1)
+                .slice(0, 8)
+            : [];
+        return { cw, sw, vgCols, offenders };
+      });
+      expect(dbGeom.vgCols).toBe(vp.expectVgCols);
+      expect(dbGeom.sw <= dbGeom.cw, `Dashboard overflow at ${vp.width}px (${dbGeom.sw} > ${dbGeom.cw}): ${JSON.stringify(dbGeom.offenders)}`).toBe(true);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await expect(page.locator('.su-lt .su-lt-toolbar')).toBeVisible();
+    await expect(page.locator('.su-lt .su-order-card.su-lt-card').first()).toBeVisible();
+    await expect(page.locator('.su-lt .su-lt-sizes').first()).toBeVisible();
+
+    // Countdown chip sits on its own row below .su-lt-title without overlapping
+    const headerGeom = await page.evaluate(() => {
+      const title = document.querySelector<HTMLElement>('.su-lt .su-lt-title');
+      const countdown = document.querySelector<HTMLElement>('.su-lt .su-lt-countdown');
+      if (!title || !countdown) throw new Error('Missing .su-lt-title or .su-lt-countdown');
+      const tr = title.getBoundingClientRect();
+      const cr = countdown.getBoundingClientRect();
+      return { titleBottom: tr.bottom, countdownTop: cr.top, countdownWidth: cr.width };
+    });
+    expect(headerGeom.countdownTop).toBeGreaterThanOrEqual(headerGeom.titleBottom - 1);
+    expect(headerGeom.countdownWidth).toBeGreaterThan(120);
+
+    // Clicking a REQ slip tag opens #global-modal cleanly
+    await page.locator('.su-lt button.su-lt-ref[data-su-action="open-slip"][data-slip-type="REQ"]').first().click();
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    // Verify 4-col -> 2-col stats, 2-col -> 1-col streams, and zero document horizontal overflow at 1440px, 768px, 375px
+    for (const vp of [
+      { width: 1440, height: 900, expectStatCols: 4, expectBodyCols: 2 },
+      { width: 768, height: 1024, expectStatCols: 2, expectBodyCols: 1 },
+      { width: 375, height: 812, expectStatCols: 2, expectBodyCols: 1 }
+    ]) {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      const geom = await page.evaluate(() => {
+        const docOverflow = document.documentElement.scrollWidth > document.documentElement.clientWidth;
+        const card = document.querySelector<HTMLElement>('.su-lt .su-order-card.su-lt-card');
+        const stats = document.querySelector<HTMLElement>('.su-lt .su-lt-stats');
+        const body = document.querySelector<HTMLElement>('.su-lt .su-lt-body');
+        if (!card || !stats || !body) throw new Error('Missing .su-lt layout elements');
+        const statCols = getComputedStyle(stats).gridTemplateColumns.trim().split(/\s+/).length;
+        const bodyCols = getComputedStyle(body).gridTemplateColumns.trim().split(/\s+/).length;
+        const cw = document.documentElement.clientWidth;
+        const sw = document.documentElement.scrollWidth;
+        const offenders = docOverflow
+          ? Array.from(document.querySelectorAll<HTMLElement>('*'))
+              .map(el => ({
+                tag: el.tagName,
+                cls: el.className,
+                right: Math.round(el.getBoundingClientRect().right)
+              }))
+              .filter(x => x.right > cw + 1)
+              .slice(0, 8)
+          : [];
+        return {
+          vp: cw,
+          sw,
+          offenders,
+          docOverflow,
+          cardRight: card.getBoundingClientRect().right,
+          clientWidth: cw,
+          statCols,
+          bodyCols
+        };
+      });
+      expect(geom.docOverflow, `Overflow at ${vp.width}px (scrollWidth=${geom.sw}): ${JSON.stringify(geom.offenders)}`).toBe(false);
+      expect(geom.cardRight).toBeLessThanOrEqual(geom.clientWidth + 1);
+      expect(geom.statCols).toBe(vp.expectStatCols);
+      expect(geom.bodyCols).toBe(vp.expectBodyCols);
+    }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.click('.admin-tab-btn[data-admin-tab="dashboard"]');
+    await page.click('#btn-remove-demo-600');
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Hall -> Stitcher chain receiving E2E: Registry 04 CRUD, reload persistence, Inward Dock cascade, Live Tracking, Alteration Bay & multi-viewport geometry', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) {
+        runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+      }
+    });
+
+    const hallName = 'Hall C Stitcher QA';
+    const stitcherA = 'Ustad Bilal';
+    const stitcherB = 'Ustad Kamran';
+    const altUser = 'e2e.alt.hall.qa';
+    const altPass = 'Alt-Hall-QA-2026!';
+
+    await authenticateAsSuperUser(page);
+
+    // 1. Registry 04: Add custom Hall and assigned Stitchers
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    const makersRegistry = page.locator('details.su-collapsible-registry[data-registry-id="makers_pos"]');
+    await makersRegistry.locator('summary').click();
+    await expect(page.locator('#admin-add-hall-input')).toBeVisible();
+
+    await page.fill('#admin-add-hall-input', hallName);
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/admin/halls') && res.request().method() === 'POST' && res.status() === 200),
+      page.click('#btn-admin-add-hall')
+    ]);
+
+    const hallCard = page.locator(`.su-hall-card[data-hall-name="${hallName}"]`);
+    await expect(hallCard).toBeVisible();
+    await hallCard.locator('[data-hall-stitcher-input]').fill(stitcherA);
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/stitchers') && res.request().method() === 'POST' && res.status() === 200),
+      hallCard.locator('button[data-su-action="add-stitcher"]').click()
+    ]);
+    await expect(hallCard).toContainText(stitcherA);
+
+    await hallCard.locator('[data-hall-stitcher-input]').fill(stitcherB);
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/stitchers') && res.request().method() === 'POST' && res.status() === 200),
+      hallCard.locator('button[data-su-action="add-stitcher"]').click()
+    ]);
+    await expect(hallCard).toContainText('2 stitchers');
+
+    // Verify Registry 04 multi-viewport zero-overflow geometry
+    for (const vp of [
+      { width: 1440, height: 900 },
+      { width: 768, height: 1024 },
+      { width: 375, height: 812 }
+    ]) {
+      await page.setViewportSize(vp);
+      const regGeom = await page.evaluate(() => ({
+        sw: document.documentElement.scrollWidth,
+        cw: document.documentElement.clientWidth
+      }));
+      expect(regGeom.sw, `Registry 04 overflow at ${vp.width}px`).toBeLessThanOrEqual(regGeom.cw);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Reload and verify Hall & Stitchers persisted in SQLite
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await page.locator('details.su-collapsible-registry[data-registry-id="makers_pos"] summary').click();
+    const persistedCard = page.locator(`.su-hall-card[data-hall-name="${hallName}"]`);
+    await expect(persistedCard).toBeVisible();
+    await expect(persistedCard).toContainText(stitcherA);
+    await expect(persistedCard).toContainText(stitcherB);
+
+    // 2. Provision an INWARD_CLERK user (who owns Dock #1 + Alteration Bay) to verify Alteration Bay optgroups under real RBAC role
+    await page.click('.admin-tab-btn[data-admin-tab="users"]');
+    await page.fill('#admin-user-name', 'E2E Alteration Hall Lead');
+    await page.fill('#admin-user-username', altUser);
+    await page.fill('#admin-user-password', altPass);
+    await page.selectOption('#admin-user-role', 'INWARD_CLERK');
+    await page.click('#btn-admin-add-system-user');
+    await expect(page.locator('.su-user-table')).toContainText(altUser);
+
+    // 3. Create an 80-pair Pending Order for Hall C Stitcher QA and open Inward Dock
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await page.selectOption('#admin-pending-order-maker', hallName);
+    await page.selectOption('#admin-pending-order-article', 'Model A1');
+    await page.fill('#admin-pending-order-po', 'PO-HALL-CHAIN-01');
+    await page.fill('.admin-order-size-val[data-size="7"]', '80');
+    await page.click('#btn-admin-add-pending-order');
+    const createdDeleteBtn = page.locator('button[data-su-action="remove-pending-order"]').first();
+    await expect(createdDeleteBtn).toBeVisible();
+    const orderId = (await createdDeleteBtn.getAttribute('data-order-id'))!;
+
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+
+    // Auto-selected Hall C Stitcher QA because it has stitchers; verify Hall A disables #grn-stitcher & blank requires Received From
+    await expect(page.locator('.inw .sub-header-bar')).toBeVisible();
+    await expect(page.locator('#grn-hall')).toHaveValue(hallName);
+    await expect(page.locator('#grn-stitcher')).toBeEnabled();
+    await expect(page.locator('#grn-stitcher')).toContainText(stitcherA);
+    await expect(page.locator('#grn-stitcher')).toContainText(stitcherB);
+    await expect(page.locator('#grn-received-from')).not.toHaveAttribute('required', '');
+
+    await page.selectOption('#grn-hall', 'Hall A');
+    await expect(page.locator('#grn-stitcher')).toBeDisabled();
+    await page.selectOption('#grn-hall', '');
+    await expect(page.locator('#grn-stitcher')).toBeDisabled();
+    await expect(page.locator('#grn-received-from')).toHaveAttribute('required', '');
+
+    await page.selectOption('#grn-hall', hallName);
+    await expect(page.locator('#grn-stitcher')).toBeEnabled();
+
+    // Receive 40 pairs from Ustad Bilal with blank note -> defaults to "Ustad Bilal (Hall C Stitcher QA)"
+    const selectedOrderOptionText = await page.locator('#grn-pending-order option:checked').textContent();
+    expect(selectedOrderOptionText || '').toContain(orderId);
+    expect(selectedOrderOptionText || '').not.toContain('pairs [');
+    await expect(page.locator('#grn-balance-total')).toHaveText('0');
+    await expect(page.locator('[data-bal-size="7"]')).toHaveClass(/is-zero/);
+    await page.fill('.grn-size-val[data-size="7"]', '');
+    await expect(page.locator('#grn-balance-total')).toHaveText('80');
+    await expect(page.locator('[data-bal-size="7"]')).not.toHaveClass(/is-zero/);
+    const receiveBtnBg = await page.locator('#btn-print-grn-slip').evaluate(el => getComputedStyle(el).backgroundColor);
+    expect(receiveBtnBg).toBe('rgb(30, 64, 175)');
+    const sizeInputStyle = await page.locator('.inw .inw-size-input').first().evaluate(el => {
+      const cs = getComputedStyle(el);
+      return { maxWidth: cs.maxWidth, appearance: cs.appearance };
+    });
+    expect(sizeInputStyle.maxWidth).toBe('none');
+    expect(sizeInputStyle.appearance).toBe('textfield');
+    await page.selectOption('#grn-stitcher', stitcherA);
+    await page.fill('#grn-received-from', '');
+    await page.fill('.grn-size-val[data-size="7"]', '40');
+    await expect(page.locator('#grn-balance-total')).toHaveText('40');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await expect(page.locator('#global-modal')).toContainText(`${hallName} → ${stitcherA}`);
+    await expect(page.locator('#global-modal')).toContainText(`${stitcherA} (${hallName})`);
+    await page.click('#modal-btn-close');
+
+    // Receive remaining 40 pairs from Ustad Kamran with explicit Delivery Note
+    await page.selectOption('#grn-hall', hallName);
+    await page.selectOption('#grn-stitcher', stitcherB);
+    await page.fill('#grn-received-from', 'Brought by Courier Khalid');
+    await page.fill('.grn-size-val[data-size="7"]', '40');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await expect(page.locator('#global-modal')).toContainText(`${hallName} → ${stitcherB}`);
+    await expect(page.locator('#global-modal')).toContainText('Brought by Courier Khalid');
+    await page.click('#modal-btn-close');
+
+    // Verify Inward GRN History Table renders mono tags, Hall -> Stitcher, and Courier/Note
+    const grnTable = page.locator('table.data-table').first();
+    await expect(grnTable.locator('.su-ref--rcv').first()).toBeVisible();
+    await expect(grnTable.locator('.su-ref--req').first()).toBeVisible();
+    await expect(grnTable).toContainText(stitcherA);
+    await expect(grnTable).toContainText(stitcherB);
+    await expect(grnTable).toContainText('Brought by Courier Khalid');
+
+    // Verify Inward Register flexible full-width layout, sub-header, & zero overflow across 1600 / 1440 / 768 / 375px
+    for (const vp of [
+      { width: 1600, height: 900, expectOrderCols: 4, expectChainCols: 3, expectQueueCols: 4 },
+      { width: 1440, height: 900, expectOrderCols: 4, expectChainCols: 3, expectQueueCols: 4 },
+      { width: 768, height: 1024, expectOrderCols: 2, expectChainCols: 1, expectQueueCols: 2 },
+      { width: 375, height: 812, expectOrderCols: 1, expectChainCols: 1, expectQueueCols: 1 }
+    ]) {
+      await page.setViewportSize({ width: vp.width, height: vp.height });
+      const inwardGeom = await page.evaluate(() => {
+        const mainEl = document.querySelector<HTMLElement>('.inw .inw-main');
+        const orderRow = document.querySelector<HTMLElement>('.inward-order-row');
+        const chainBar = document.querySelector<HTMLElement>('.inward-chain-bar');
+        const queueMeta = document.querySelector<HTMLElement>('.inw-queue-meta');
+        return {
+          sw: document.documentElement.scrollWidth,
+          cw: document.documentElement.clientWidth,
+          mainMaxWidth: mainEl ? getComputedStyle(mainEl).maxWidth : '',
+          mainWidth: mainEl ? mainEl.getBoundingClientRect().width : 0,
+          orderCols: orderRow ? getComputedStyle(orderRow).gridTemplateColumns.trim().split(/\s+/).length : 0,
+          chainCols: chainBar ? getComputedStyle(chainBar).gridTemplateColumns.trim().split(/\s+/).length : 0,
+          queueCols: queueMeta ? getComputedStyle(queueMeta).gridTemplateColumns.trim().split(/\s+/).length : 0
+        };
+      });
+      expect(inwardGeom.sw, `Inward overflow at ${vp.width}px`).toBeLessThanOrEqual(inwardGeom.cw);
+      expect(inwardGeom.mainMaxWidth, `Inward main flexible maxWidth at ${vp.width}px`).toBe('none');
+      if (vp.width === 1600) {
+        expect(inwardGeom.mainWidth, 'Inward main stretches past 1440px on wide screens').toBeGreaterThanOrEqual(1550);
+      }
+      expect(inwardGeom.orderCols, `Inward order row cols at ${vp.width}px`).toBe(vp.expectOrderCols);
+      expect(inwardGeom.chainCols, `Inward chain bar cols at ${vp.width}px`).toBe(vp.expectChainCols);
+      expect(inwardGeom.queueCols, `Inward queue meta cols at ${vp.width}px`).toBe(vp.expectQueueCols);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // 4. Super User Live Tracking: Search by Stitcher Name and verify Supply Stream batch sub-line
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.fill('#admin-tracking-search', stitcherA);
+    const trackingCard = page.locator(`#tracking-order-card-${orderId}`);
+    await expect(trackingCard).toBeVisible();
+    await expect(trackingCard).toContainText(`${hallName} → ${stitcherA}`);
+    await page.fill('#admin-tracking-search', '');
+
+    // 5. Sign in as INWARD_CLERK and switch to Alteration Bay to verify #defect-tailor-select groups Hall C Stitcher QA stitchers
+    await page.click('#btn-session-lock');
+    await page.fill('#auth-username', altUser);
+    await page.fill('#auth-password', altPass);
+    await page.click('#auth-form button[type="submit"]');
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('#btn-inward-nav-repair');
+    await expect(page.locator('#defect-tailor-select')).toBeVisible();
+    await expect(page.locator(`#defect-tailor-select optgroup[label="${hallName} Stitchers"] option`)).toHaveCount(2);
+    await page.setViewportSize({ width: 1600, height: 900 });
+    const repairGeom = await page.evaluate(() => {
+      const vp = document.querySelector<HTMLElement>('.main-viewport');
+      return {
+        sw: document.documentElement.scrollWidth,
+        cw: document.documentElement.clientWidth,
+        maxWidth: vp ? getComputedStyle(vp).maxWidth : '',
+        width: vp ? vp.getBoundingClientRect().width : 0
+      };
+    });
+    expect(repairGeom.sw).toBeLessThanOrEqual(repairGeom.cw);
+    expect(repairGeom.maxWidth).toBe('none');
+    expect(repairGeom.width).toBeGreaterThanOrEqual(1550);
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // 6. Sign back in as Super User & clean up temporary Hall C Stitcher QA
+    await page.click('#btn-session-lock');
+    await page.fill('#auth-username', TEST_ADMIN.username);
+    await page.fill('#auth-password', TEST_ADMIN.password);
+    await page.click('#auth-form button[type="submit"]');
+    await expect(page.locator('[data-testid="superuser-command-center"]')).toBeVisible();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    const cleanupDetails = page.locator('details.su-collapsible-registry[data-registry-id="makers_pos"]');
+    if (!(await cleanupDetails.evaluate(el => el.hasAttribute('open')))) {
+      await cleanupDetails.locator('summary').click();
+    }
+    const hallDeleteBtn = page.locator(`.su-hall-card[data-hall-name="${hallName}"] button[data-su-action="delete-hall"]`);
+    await hallDeleteBtn.click();
+    await expect(page.locator('#confirm-dialog-confirm')).toBeVisible();
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/admin/halls/') && res.request().method() === 'DELETE' && res.status() === 200),
+      page.click('#confirm-dialog-confirm')
+    ]);
+    await expect(page.locator(`.su-hall-card[data-hall-name="${hallName}"]`)).toHaveCount(0);
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Multi-article Buyer Orders (-1/-2) -> Packing Hall stock-only filter -> Dashboard Branching Order Tree', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) {
+        runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+      }
+    });
+
+    await page.addInitScript(() => {
+      window.print = () => {};
+    });
+
+    await authenticateAsSuperUser(page);
+
+    // 1. Create temporary Packing Supervisor user to verify Packing Hall stock-only visibility
+    await page.click('.admin-tab-btn[data-admin-tab="users"]');
+    const packUser = 'e2e.pack.stockonly';
+    const packPass = 'Pack-Stock-Only-2026!';
+    await page.fill('#admin-user-name', 'Packing Stock Supervisor');
+    await page.fill('#admin-user-username', packUser);
+    await page.fill('#admin-user-password', packPass);
+    await page.selectOption('#admin-user-role', 'PACKING_SUPERVISOR');
+    await page.click('#btn-admin-add-system-user');
+    await expect(page.locator('.su-user-table')).toContainText(packUser);
+
+    // 2. Multi-article Buyer Order Creation (OXFORD, 2 articles, default Hall A + override Hall B)
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await page.selectOption('#admin-pending-order-buyer', 'OXFORD');
+    await page.fill('#admin-pending-order-po', 'PO-MULTI-TREE-01');
+    await page.selectOption('#admin-pending-order-maker', 'Hall A');
+    await page.click('#btn-admin-toggle-multi-articles');
+    await expect(page.locator('[data-testid="admin-multi-article-picker"]')).toBeVisible();
+
+    // Verify responsive zero overflow on Order Creation with picker open across 1440 / 768 / 375
+    for (const vp of [
+      { width: 1440, height: 900 },
+      { width: 768, height: 1024 },
+      { width: 375, height: 812 }
+    ]) {
+      await page.setViewportSize(vp);
+      const ovf = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+      expect(ovf, `Order creation picker overflow at ${vp.width}px`).toBe(false);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const checkboxes = page.locator('.admin-multi-art-check');
+    expect(await checkboxes.count()).toBeGreaterThanOrEqual(2);
+    await checkboxes.nth(0).check();
+    await checkboxes.nth(1).check();
+
+    const subCards = page.locator('.su-suborder-card');
+    await expect(subCards).toHaveCount(2);
+    await expect(page.locator('.admin-line-maker[data-line-index="0"]')).toHaveValue('Hall A');
+    await expect(page.locator('.admin-line-maker[data-line-index="1"]')).toHaveValue('Hall A');
+
+    // Override sub-order 2 contractor to Hall B cleanly
+    await page.selectOption('.admin-line-maker[data-line-index="1"]', 'Hall B');
+    await page.locator('.admin-line-size-val[data-line-index="0"]').first().fill('100');
+    await page.locator('.admin-line-size-val[data-line-index="1"]').first().fill('60');
+    await expect(page.locator('#btn-admin-add-pending-order')).toContainText('Save & Issue 2 Sub-Orders');
+
+    const [batchRes] = await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/admin/pending-orders') && res.request().method() === 'POST' && res.status() === 200),
+      page.click('#btn-admin-add-pending-order')
+    ]);
+    const batchJson = await batchRes.json();
+    const baseOrderId: string = batchJson.data.baseOrderId;
+    const sub1: string = batchJson.data.orderIds[0];
+    const sub2: string = batchJson.data.orderIds[1];
+    expect(sub1).toBe(`${baseOrderId}-1`);
+    expect(sub2).toBe(`${baseOrderId}-2`);
+
+    // Reload persistence check for sub-orders
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await expect(page.locator(`button[data-su-action="remove-pending-order"][data-order-id="${sub1}"]`)).toBeVisible();
+    await expect(page.locator(`button[data-su-action="remove-pending-order"][data-order-id="${sub2}"]`)).toBeVisible();
+
+    // 3. Sign in as Packing Supervisor BEFORE GRN: unreceived sub1/sub2 must NOT appear in Packing Hall
+    await page.click('#btn-session-lock');
+    await page.fill('#auth-username', packUser);
+    await page.fill('#auth-password', packPass);
+    await page.click('#auth-form button[type="submit"]');
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await expect(page.locator('#wip-batch-select')).toBeVisible();
+    const preGrnOptions = await page.locator('#wip-batch-select').innerText();
+    expect(preGrnOptions).not.toContain(sub1);
+    expect(preGrnOptions).not.toContain(sub2);
+
+    // 4. Sign in as Super User -> receive partial 40 of 100 pairs on sub1 at Inward Register
+    await page.click('#btn-session-lock');
+    await page.fill('#auth-username', TEST_ADMIN.username);
+    await page.fill('#auth-password', TEST_ADMIN.password);
+    await page.click('#auth-form button[type="submit"]');
+    await expect(page.locator('[data-testid="superuser-command-center"]')).toBeVisible();
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${sub1}"]`);
+    await page.fill('#grn-received-from', 'OXFORD Sub1 Carrier');
+    await page.locator('.grn-size-val').first().fill('40');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    // 5. Return as Packing Supervisor -> ONLY sub1 shows (40 pairs available, never 100), sub2 still hidden
+    await page.click('#btn-session-lock');
+    await page.fill('#auth-username', packUser);
+    await page.fill('#auth-password', packPass);
+    await page.click('#auth-form button[type="submit"]');
+    await expect(page.locator('#wip-batch-select')).toBeVisible();
+    const afterGrn1Text = await page.locator('#wip-batch-select').innerText();
+    expect(afterGrn1Text).toContain(`${sub1}`);
+    expect(afterGrn1Text).not.toContain(sub2);
+    const sub1OptionText = await page.locator(`#wip-batch-select option[value="ORDER:${sub1}"]`).textContent();
+    expect(sub1OptionText || '').toContain('40 pairs available');
+    expect(sub1OptionText || '').not.toContain('100 pairs');
+
+    // Open REQ modal by choosing Load ORDER:sub1 -> verify stock-only summary & Available row (no Order Remaining)
+    await page.selectOption('#wip-batch-select', `ORDER:${sub1}`);
+    await expect(page.locator('#new-req-cap-summary')).toContainText('Available at Dock: 40 Prs');
+    await expect(page.locator('#new-req-cap-summary')).not.toContainText('Order Remaining');
+    await expect(page.locator('#new-req-cap-summary')).not.toContainText('Inward Received');
+    await expect(page.locator('[data-testid="new-req-avail-row"]')).toContainText('40');
+
+    await page.locator('.req-size-val').first().fill('25');
+    await expect(page.locator('#new-req-pairs')).toHaveValue('25');
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes(`/api/orders/${encodeURIComponent(sub1)}/requisitions`) && res.status() === 200),
+      page.click('#btn-confirm-lot-draw')
+    ]);
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+
+    // Remaining unclaimed stock on sub1 now drops to 15 pairs available
+    const sub1AfterReqText = await page.locator(`#wip-batch-select option[value="ORDER:${sub1}"]`).textContent();
+    expect(sub1AfterReqText || '').toContain('15 pairs available');
+
+    // 6. Receive 60 pairs on sub2 & create 30-pair REQ on sub2
+    await page.click('#btn-session-lock');
+    await page.fill('#auth-username', TEST_ADMIN.username);
+    await page.fill('#auth-password', TEST_ADMIN.password);
+    await page.click('#auth-form button[type="submit"]');
+    await expect(page.locator('[data-testid="superuser-command-center"]')).toBeVisible();
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${sub2}"]`);
+    await page.fill('#grn-received-from', 'OXFORD Sub2 Carrier');
+    await page.locator('.grn-size-val').first().fill('60');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    await page.click('#btn-session-lock');
+    await page.fill('#auth-username', packUser);
+    await page.fill('#auth-password', packPass);
+    await page.click('#auth-form button[type="submit"]');
+    await page.selectOption('#wip-batch-select', `ORDER:${sub2}`);
+    await expect(page.locator('#new-req-cap-summary')).toContainText('Available at Dock: 60 Prs');
+    await page.locator('.req-size-val').first().fill('30');
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes(`/api/orders/${encodeURIComponent(sub2)}/requisitions`) && res.status() === 200),
+      page.click('#btn-confirm-lot-draw')
+    ]);
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+
+    // 7. Sign in as Super User -> verify Dashboard Branching Order Tree ("mind map")
+    await page.click('#btn-session-lock');
+    await page.fill('#auth-username', TEST_ADMIN.username);
+    await page.fill('#auth-password', TEST_ADMIN.password);
+    await page.click('#auth-form button[type="submit"]');
+    await expect(page.locator('[data-testid="superuser-command-center"]')).toBeVisible();
+    await page.click('.admin-tab-btn[data-admin-tab="dashboard"]');
+
+    const treeGroup = page.locator(`[data-testid="su-order-tree-group"][data-base-order="${baseOrderId}"]`);
+    await expect(treeGroup).toBeVisible();
+    await expect(treeGroup).toContainText('2 sub-orders');
+    await expect(treeGroup.locator(`[data-sub-order="${sub1}"]`)).toBeVisible();
+    await expect(treeGroup.locator(`[data-sub-order="${sub2}"]`)).toBeVisible();
+    await expect(treeGroup.locator(`[data-sub-order="${sub1}"] button[data-slip-type="M-REQ"]`)).toBeVisible();
+    await expect(treeGroup.locator(`[data-sub-order="${sub1}"] button[data-slip-type="A-REQ"]`)).toBeVisible();
+
+    // Click M-REQ slip directly in tree -> opens printable slip modal cleanly without toggling <details>
+    await treeGroup.locator(`[data-sub-order="${sub1}"] button[data-slip-type="M-REQ"]`).click();
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    // Verify Dashboard Order Tree has zero horizontal overflow across 1440 / 768 / 375
+    for (const vp of [
+      { width: 1440, height: 900 },
+      { width: 768, height: 1024 },
+      { width: 375, height: 812 }
+    ]) {
+      await page.setViewportSize(vp);
+      const ovf = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+      expect(ovf, `Dashboard order tree overflow at ${vp.width}px`).toBe(false);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // Click Filter all on parent tree header -> opens Live Tracking with both sub-orders visible
+    await treeGroup.locator(`summary button[data-su-action="inspect-order"][data-order-id="${baseOrderId}"]`).click();
+    await expect(page.locator('#admin-tracking-search')).toHaveValue(baseOrderId);
+    await expect(page.locator(`#tracking-order-card-${sub1}`)).toBeVisible();
+    await expect(page.locator(`#tracking-order-card-${sub2}`)).toBeVisible();
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Auth screen brand is centered and enlarged inside auth-card', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error' && !msg.text().includes('status of 400')) {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+
+    await page.goto('/');
+    await expect(page.locator('.auth-card')).toBeVisible();
+
+    const brand = page.locator('.auth-brand');
+    await expect(brand).toBeVisible();
+
+    const metrics = await page.evaluate(() => {
+      const cardEl = document.querySelector('.auth-card') as HTMLElement;
+      const brandEl = document.querySelector('.auth-brand') as HTMLElement;
+      const svgEl = document.querySelector('.auth-brand .brand-logo-svg') as HTMLElement;
+      const textEl = document.querySelector('.auth-brand-text') as HTMLElement;
+      const btnEl = document.querySelector('.auth-submit-btn') as HTMLElement;
+      const cardRect = cardEl.getBoundingClientRect();
+      const svgRect = svgEl.getBoundingClientRect();
+      const textRect = textEl.getBoundingClientRect();
+      const btnRect = btnEl.getBoundingClientRect();
+      const contentLeft = Math.min(svgRect.left, textRect.left);
+      const contentRight = Math.max(svgRect.right, textRect.right);
+      const contentCenterX = (contentLeft + contentRight) / 2;
+      const cardCenterX = cardRect.left + cardRect.width / 2;
+      const btnCenterX = btnRect.left + btnRect.width / 2;
+      const brandStyle = getComputedStyle(brandEl);
+      const textStyle = getComputedStyle(textEl);
+      const svgStyle = getComputedStyle(svgEl);
+      return {
+        justifyContent: brandStyle.justifyContent,
+        ariaLabel: textEl.getAttribute('aria-label'),
+        shutterChars: document.querySelectorAll('.auth-brand-text .shutter-char-wrap').length,
+        shutterSlices: document.querySelectorAll('.auth-brand-text .shutter-char-slice').length,
+        fontSize: parseFloat(textStyle.fontSize),
+        svgWidth: parseFloat(svgStyle.width),
+        svgHeight: parseFloat(svgStyle.height),
+        centerDelta: Math.abs(contentCenterX - cardCenterX),
+        btnWidth: btnRect.width,
+        cardWidth: cardRect.width,
+        btnCenterDelta: Math.abs(btnCenterX - cardCenterX),
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth
+      };
+    });
+
+    expect(metrics.justifyContent).toBe('center');
+    expect(metrics.ariaLabel).toBe('HAMMAD INDUSTRIES');
+    expect(metrics.shutterChars).toBe('HAMMAD INDUSTRIES'.length);
+    expect(metrics.shutterSlices).toBe('HAMMAD INDUSTRIES'.length * 3);
+    expect(metrics.fontSize).toBeGreaterThanOrEqual(20);
+    expect(metrics.svgWidth).toBeCloseTo(39, 1);
+    expect(metrics.svgHeight).toBeCloseTo(39, 1);
+    expect(metrics.centerDelta).toBeLessThanOrEqual(2);
+    expect(metrics.btnWidth).toBeLessThan(metrics.cardWidth * 0.6);
+    expect(metrics.btnCenterDelta).toBeLessThanOrEqual(2);
+    expect(metrics.overflow).toBe(false);
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    const mobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    expect(mobileOverflow).toBe(false);
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Stage 5 partial split boxing (AIR vs SEA), custom master carton dimensions, CBM calculation, and reload persistence', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error' && !msg.text().includes('status of 400')) {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    // Seed 1 clean order -> GRN -> REQ -> Stages 1-4 -> Final QC via API
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Alpine Split Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-SPLIT-2026',
+        article: 'V3-SPLIT-TEST',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+        notes: 'PO-SPLIT-2026'
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Alpine Split Buyer',
+        poNumber: 'PO-SPLIT-2026',
+        articleName: 'V3-SPLIT-TEST',
+        colorShade: 'Black',
+        rcvdPairs: 200,
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+        remarks: 'Split test GRN'
+      });
+
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, {
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 }
+      });
+      const reqNo = reqRes.req_number;
+
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 200 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 200, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 200, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 200, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 200 });
+      await post(`/api/qc/${encodeURIComponent(reqNo)}/aql-audit`, {
+        foundDefects: 0,
+        inspectorId: '4402',
+        inspectorName: 'Tariq Mehmood'
+      });
+
+      return { orderId, reqNo };
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+
+    // Open Packing Hall for the seeded order
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    const openPackingBtn = page.locator(`#tracking-order-card-${seeded.orderId} button[data-su-action="open-req-screen"][data-target-screen="screen-packing"]`).first();
+    await expect(openPackingBtn).toBeVisible();
+    await openPackingBtn.click();
+    await expect(page.locator('#btn-wip-step5')).toBeEnabled();
+
+    // Batch 1: Box 100 pairs (50/ctn -> 2 cartons) in 45x35x30 cm via AIR
+    await page.click('#btn-wip-step5');
+    await expect(page.locator('#step5-pairs-input')).toBeVisible();
+    await page.fill('#step5-pairs-input', '100');
+    await page.fill('#step5-pairs-per-ctn-input', '50');
+    await page.fill('#step5-dim-l', '45');
+    await page.fill('#step5-dim-w', '35');
+    await page.fill('#step5-dim-h', '30');
+    await page.selectOption('#step5-ship-mode', 'AIR');
+    await expect(page.locator('#step5-live-preview')).toContainText('2 cartons');
+    await expect(page.locator('#step5-live-preview')).toContainText('0.095 CBM total');
+    await page.click('#btn-submit-step5-action');
+
+    await expect(page.locator('.panel-counter-badge', { hasText: '2 Cartons' })).toBeVisible();
+    await expect(page.locator('.portal-footer')).toContainText('0.095 CBM');
+    await expect(page.locator('.portal-footer')).toContainText('Air 100 / Sea 0 prs');
+
+    // Batch 2: Box remaining 100 pairs (50/ctn -> 2 cartons) in 60x40x35 cm as Ready (UNASSIGNED)
+    await page.click('#btn-wip-step5');
+    await expect(page.locator('#step5-pairs-input')).toHaveValue('100');
+    await page.fill('#step5-pairs-per-ctn-input', '50');
+    await page.fill('#step5-dim-l', '60');
+    await page.fill('#step5-dim-w', '40');
+    await page.fill('#step5-dim-h', '35');
+    await page.selectOption('#step5-ship-mode', 'UNASSIGNED');
+    await page.click('#btn-submit-step5-action');
+
+    await expect(page.locator('.panel-counter-badge', { hasText: '4 Cartons' })).toBeVisible();
+    // 2 * 0.0473 + 2 * 0.084 = 0.2626 -> 0.263 CBM
+    await expect(page.locator('.portal-footer')).toContainText('0.263 CBM');
+
+    // Dispatch one Ready carton by Sea directly from Manifest Action button
+    const seaDispatchBtn = page.locator('button[data-carton-dispatch-mode="SEA"]').first();
+    await expect(seaDispatchBtn).toBeVisible();
+    await seaDispatchBtn.click();
+    await expect(page.locator('.portal-footer')).toContainText('Air 100 / Sea 50 prs');
+
+    // Reload and verify SQLite persistence
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.fill('#admin-tracking-search', seeded.orderId);
+    await page.getByRole('button', { name: 'Expand all' }).click();
+    await page.locator(`#tracking-order-card-${seeded.orderId} button[data-su-action="open-req-screen"][data-target-screen="screen-packing"]`).first().click();
+    await expect(page.locator('.panel-counter-badge', { hasText: '4 Cartons' })).toBeVisible();
+    await expect(page.locator('.portal-footer')).toContainText('0.263 CBM');
+    await expect(page.locator('.portal-footer')).toContainText('Air 100 / Sea 50 prs');
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Super User QC & Dispatch tab: AQL inspection, carton dimensions, Air/Sea split, release and reload persistence', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error' && !msg.text().includes('status of 400')) {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Alpine QCD Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-QCD-2026',
+        article: 'V3-QCD-TEST',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+        notes: 'PO-QCD-2026'
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Alpine QCD Buyer',
+        poNumber: 'PO-QCD-2026',
+        articleName: 'V3-QCD-TEST',
+        colorShade: 'Black',
+        rcvdPairs: 200,
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
+        remarks: 'QCD test GRN'
+      });
+
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, {
+        sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 }
+      });
+      const reqNo = reqRes.req_number;
+
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 200 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 200, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 200, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 200, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 200 });
+
+      return { orderId, reqNo };
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+
+    // 1. Live Tracking -> filter order -> Expand all -> Open QC & dispatch
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.fill('#admin-tracking-search', seeded.orderId);
+    await page.getByRole('button', { name: 'Expand all' }).click();
+    await page.locator(`[data-su-action="open-qc-dispatch"][data-order-id="${seeded.orderId}"]`).click();
+
+    const queueRow = page.locator(`#qcd-queue tr[data-qcd-row="${seeded.reqNo}"]`);
+    await expect(queueRow).toBeVisible();
+    await expect(queueRow).toContainText('Awaiting AQL');
+
+    // 2. Inspect AQL (0 defects -> Ready to box)
+    await page.locator(`[data-qcd-action="aql"][data-req-number="${seeded.reqNo}"]`).click();
+    await page.fill('#aql-found-defects', '0');
+    await page.click('#btn-apply-aql-audit');
+    await expect(queueRow).toContainText('Ready to box');
+
+    // 3. Box lot 1: 100 pairs @ 50/ctn in 45x35x30 via AIR -> 2 manifest rows
+    await page.locator(`#qcd-queue [data-qcd-action="box"][data-req-number="${seeded.reqNo}"]`).click();
+    await page.fill('#step5-pairs-input', '100');
+    await page.fill('#step5-pairs-per-ctn-input', '50');
+    await page.fill('#step5-dim-l', '45');
+    await page.fill('#step5-dim-w', '35');
+    await page.fill('#step5-dim-h', '30');
+    await page.selectOption('#step5-ship-mode', 'AIR');
+    await page.click('#btn-submit-step5-action');
+    await expect(page.locator('#qcd-manifest tbody tr')).toHaveCount(2);
+
+    // 4. Box remaining 100 pairs @ 50/ctn in 60x40x35 via SEA -> 4 manifest rows, 0.263 CBM, Release enabled
+    await page.locator(`#qcd-queue [data-qcd-action="box"][data-req-number="${seeded.reqNo}"]`).click();
+    await page.fill('#step5-pairs-per-ctn-input', '50');
+    await page.fill('#step5-dim-l', '60');
+    await page.fill('#step5-dim-w', '40');
+    await page.fill('#step5-dim-h', '35');
+    await page.selectOption('#step5-ship-mode', 'SEA');
+    await page.click('#btn-submit-step5-action');
+    await expect(page.locator('#qcd-manifest tbody tr')).toHaveCount(4);
+    await expect(page.locator('#qcd-total-cbm')).toContainText('0.263');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Air 100 prs');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Sea 100 prs');
+    await expect(page.locator('#qcd-release-btn')).toBeEnabled();
+
+    // 5. Set Air/Sea allotment explicitly (1 Air, 3 Sea) -> save -> verify Air 50 prs / Sea 150 prs
+    await page.fill('#qcd-air-cartons-input', '1');
+    await expect(page.locator('#qcd-sea-cartons-input')).toHaveValue('3');
+    await page.click('[data-qcd-action="save-air-sea-split"]');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Air 50 prs');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Sea 150 prs');
+    await expect(page.locator('#qcd-release-btn')).toBeEnabled();
+
+    // 6. Release & dispatch (stub window.print so headless browser doesn't block)
+    await page.evaluate(() => { window.print = () => {}; });
+    await page.click('#qcd-release-btn');
+    await expect(page.getByText(/released for dispatch/).first()).toBeVisible();
+
+    // 7. Reload and re-open QC & Dispatch tab -> test #qcd-order-select + persisted allotment + Dispatched status
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+    await expect(page.locator('#qcd-manifest tbody tr')).toHaveCount(4);
+    await expect(page.locator('#qcd-total-cbm')).toContainText('0.263');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Air 50 prs');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Sea 150 prs');
+    await expect(page.locator(`#qcd-queue tr[data-qcd-row="${seeded.reqNo}"]`)).toContainText('Dispatched');
+    await expect(page.locator('#qcd-release-btn')).toContainText('Dispatched');
+    await expect(page.locator('#qcd-release-btn')).toBeDisabled();
+
+    // 7. Zero horizontal overflow at 1440px and 768px
+    for (const vp of [{ width: 1440, height: 900 }, { width: 768, height: 900 }]) {
+      await page.setViewportSize(vp);
+      const ovf = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+      expect(ovf, `QC & Dispatch overflow at ${vp.width}px`).toBe(false);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    // 8. Zero runtime errors
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Super User Edit Order: updates planned qty, due date & contractor split, blocks shrink below received stock, and persists across reload', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error' && !/status of 40[01]/.test(msg.text())) {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      // Allow intentional 400 guardrail and 401 wrong-password rejections during test assertions
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    // Seed an order and receive 40 pairs on size 7 via API
+    const seededOrderId = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+      const ord = await post('/api/admin/pending-orders', {
+        buyer: 'Alpine Edit Buyer',
+        maker: 'Hall A',
+        poNumber: 'PO-EDIT-E2E',
+        article: 'V3-EDIT-TEST',
+        color: 'Black',
+        dueDate: '2026-12-01',
+        sizeFormat: 'LEGACY_7_11',
+        sizes: { '7': 50, '8': 50, '9': 0, '10': 0, '11': 0 }
+      });
+      const oid = ord.order_id || ord.orderId;
+      await post('/api/store/receivings', {
+        orderId: oid,
+        makerContractor: 'Hall A',
+        receivedFrom: 'Driver Hamza',
+        customerName: 'Alpine Edit Buyer',
+        poNumber: 'PO-EDIT-E2E',
+        articleName: 'V3-EDIT-TEST',
+        colorShade: 'Black',
+        rcvdPairs: 40,
+        sizes: [{ sizeCode: '7', orderPairs: 50, rcvdPairs: 40 }],
+        remarks: 'Initial partial GRN'
+      });
+      return oid;
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+
+    // Open Live Tracking -> filter to our order -> click Edit order
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.fill('#admin-tracking-search', seededOrderId);
+    await page.getByRole('button', { name: 'Expand all' }).click();
+    await page.locator(`#tracking-order-card-${seededOrderId} button[data-su-action="edit-pending-order"]`).click();
+
+    await expect(page.locator('#edit-order-modal-body')).toBeVisible();
+    await expect(page.locator('#edit-order-grand-total')).toHaveText('100');
+
+    // Password check: wrong Admin password is rejected with 401, modal remains open, and input clears
+    await page.fill('#edit-order-admin-password', 'Wrong-Password-999');
+    await page.click('#btn-submit-edit-order');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await expect(page.locator('#edit-order-admin-password')).toHaveValue('');
+
+    // Guardrail check: shrinking size 7 below 40 received pairs is blocked even with valid password
+    await page.fill('#edit-order-admin-password', TEST_ADMIN.password);
+    await page.fill('.edit-order-size-val[data-row-idx="0"][data-size="7"]', '20');
+    await expect(page.locator('#edit-order-grand-total')).toHaveText('70');
+    await page.click('#btn-submit-edit-order');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+
+    // Valid edit: increase size 7 to 90 (total 140), change due date and PO, add reason, confirm password, and save
+    await page.fill('.edit-order-size-val[data-row-idx="0"][data-size="7"]', '90');
+    await page.fill('#edit-order-due-date', '2026-12-28');
+    await page.fill('#edit-order-po', 'PO-EDIT-REV2');
+    await page.fill('#edit-order-reason', 'Buyer expanded size 7 by 40 pairs');
+    await page.fill('#edit-order-admin-password', TEST_ADMIN.password);
+    await page.click('#btn-submit-edit-order');
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+
+    // Reload and verify updated qty (140), PO, and due date persist
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.fill('#admin-tracking-search', seededOrderId);
+    const card = page.locator(`#tracking-order-card-${seededOrderId}`);
+    await expect(card).toContainText('140');
+    await expect(card).toContainText('PO-EDIT-REV2');
+    await expect(card).toContainText('2026-12-28');
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Item 6: Partial-lot release keeps Release button disabled and sends zero dispatch POSTs', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+      const sizes = { '7': 20, '8': 20, '9': 20, '10': 20, '11': 20 };
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Partial Release Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-PART-100',
+        article: 'V3-PARTIAL-REL',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Partial Release Buyer',
+        poNumber: 'PO-PART-100',
+        articleName: 'V3-PARTIAL-REL',
+        colorShade: 'Black',
+        rcvdPairs: 100,
+        sizes,
+        remarks: 'Partial release test GRN'
+      });
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, { sizes });
+      const reqNo = reqRes.req_number;
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 100 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 100, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 100, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 100, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 100 });
+      await post(`/api/qc/${encodeURIComponent(reqNo)}/aql-audit`, { foundDefects: 0, inspectorId: '4402', inspectorName: 'Tariq Mehmood' });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step5-cartons-gated`, {
+        pairsPerCarton: 30,
+        pairsToPack: 60,
+        dimensionsCm: '60x40x35',
+        shippingMode: 'AIR',
+        sealPrefix: 'PART-1'
+      });
+      return { orderId, reqNo };
+    });
+
+    let releasePostCount = 0;
+    page.on('request', req => {
+      if (req.method() === 'POST' && req.url().includes(`/api/wip/${encodeURIComponent(seeded.reqNo)}/dispatch`)) {
+        try {
+          if (req.postDataJSON()?.release) releasePostCount += 1;
+        } catch {
+          // ignore non-JSON
+        }
+      }
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+
+    await expect(page.locator('#qcd-split-summary')).toContainText('Air 60 prs');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Unboxed 40 prs');
+    await expect(page.locator('#qcd-release-btn')).toBeDisabled();
+
+    await page.locator('#qcd-release-btn').click({ force: true });
+    await page.waitForTimeout(250);
+    expect(releasePostCount).toBe(0);
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Item 6: Double-click Release sends only 1 dispatch POST and logs 1 DISPATCH_RELEASE audit event', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+      const sizes = { '7': 20, '8': 20, '9': 20, '10': 20, '11': 20 };
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Double Click Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-DBL-100',
+        article: 'V3-DBL-REL',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Double Click Buyer',
+        poNumber: 'PO-DBL-100',
+        articleName: 'V3-DBL-REL',
+        colorShade: 'Black',
+        rcvdPairs: 100,
+        sizes,
+        remarks: 'Double click release test GRN'
+      });
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, { sizes });
+      const reqNo = reqRes.req_number;
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 100 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 100, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 100, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 100, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 100 });
+      await post(`/api/qc/${encodeURIComponent(reqNo)}/aql-audit`, { foundDefects: 0, inspectorId: '4402', inspectorName: 'Tariq Mehmood' });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step5-cartons-gated`, {
+        pairsPerCarton: 50,
+        pairsToPack: 100,
+        dimensionsCm: '60x40x35',
+        shippingMode: 'AIR',
+        sealPrefix: 'DBL-1'
+      });
+      return { orderId, reqNo };
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+    await expect(page.locator('#qcd-release-btn')).toBeEnabled();
+
+    await page.evaluate(() => { window.print = () => {}; });
+
+    let releasePostCount = 0;
+    await page.route('**/api/wip/*/dispatch', async route => {
+      const postJson = route.request().postDataJSON();
+      if (postJson?.release) {
+        releasePostCount += 1;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      await route.continue();
+    });
+
+    const btnBox = await page.locator('#qcd-release-btn').boundingBox();
+    expect(btnBox).toBeTruthy();
+    await page.mouse.dblclick(btnBox!.x + btnBox!.width / 2, btnBox!.y + btnBox!.height / 2);
+
+    await expect(page.locator('#qcd-release-btn')).toContainText('Dispatched');
+    expect(releasePostCount).toBe(1);
+    await page.click('#modal-close-x');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    const auditRegistry = page.locator('details[data-registry-id="audit_trail"]');
+    await auditRegistry.locator('summary').click();
+    const auditRows = auditRegistry.locator('tbody tr', { hasText: 'DISPATCH_RELEASE' }).filter({ hasText: seeded.reqNo });
+    await expect(auditRows).toHaveCount(1);
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Item 6: Bulk-assign Air/Sea split preserves existing AIR cartons when assigning SEA', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+      const sizes = { '7': 30, '8': 30, '9': 30, '10': 30, '11': 30 };
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Bulk Overwrite Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-BULK-150',
+        article: 'V3-BULK-KEEP',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Bulk Overwrite Buyer',
+        poNumber: 'PO-BULK-150',
+        articleName: 'V3-BULK-KEEP',
+        colorShade: 'Black',
+        rcvdPairs: 150,
+        sizes,
+        remarks: 'Bulk overwrite test GRN'
+      });
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, { sizes });
+      const reqNo = reqRes.req_number;
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 150 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 150, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 150, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 150, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 150 });
+      await post(`/api/qc/${encodeURIComponent(reqNo)}/aql-audit`, { foundDefects: 0, inspectorId: '4402', inspectorName: 'Tariq Mehmood' });
+      // Carton #1 UNASSIGNED, Cartons #2 & #3 AIR
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step5-cartons-gated`, {
+        pairsPerCarton: 50,
+        pairsToPack: 50,
+        dimensionsCm: '60x40x35',
+        shippingMode: 'UNASSIGNED',
+        sealPrefix: 'BLK-U'
+      });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step5-cartons-gated`, {
+        pairsPerCarton: 50,
+        pairsToPack: 100,
+        dimensionsCm: '60x40x35',
+        shippingMode: 'AIR',
+        sealPrefix: 'BLK-A'
+      });
+      return { orderId, reqNo };
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+
+    const rows = page.locator('#qcd-manifest tbody tr');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText('Ready');
+    await expect(rows.nth(1)).toContainText('AIR');
+    await expect(rows.nth(2)).toContainText('AIR');
+
+    await page.fill('#qcd-air-cartons-input', '2');
+    await expect(page.locator('#qcd-sea-cartons-input')).toHaveValue('1');
+    await page.click('[data-qcd-action="save-air-sea-split"]');
+
+    await expect(rows.nth(0)).toContainText('SEA');
+    await expect(rows.nth(1)).toContainText('AIR');
+    await expect(rows.nth(2)).toContainText('AIR');
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+    const reloadedRows = page.locator('#qcd-manifest tbody tr');
+    await expect(reloadedRows.nth(0)).toContainText('SEA');
+    await expect(reloadedRows.nth(1)).toContainText('AIR');
+    await expect(reloadedRows.nth(2)).toContainText('AIR');
+    expect(runtimeErrors).toEqual([]);
+  });
 });

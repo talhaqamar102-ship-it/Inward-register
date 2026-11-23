@@ -199,23 +199,10 @@ export const AuthService = {
 
     db.exec('BEGIN IMMEDIATE');
     try {
-      const adminRow = db.prepare(`
-        SELECT * FROM mes_users
-        WHERE user_id = ? AND active = 1 AND role = 'SUPER_USER'
-      `).get(normalizedAdminId);
-      if (!adminRow) {
-        const err = new Error('Admin session is invalid.');
-        err.statusCode = 401;
-        throw err;
-      }
-
-      const actualHash = scryptSync(rawAdminPassword, adminRow.password_salt, PASSWORD_HASH_BYTES);
-      const expectedHash = Buffer.from(adminRow.password_hash, 'hex');
-      if (actualHash.length !== expectedHash.length || !timingSafeEqual(actualHash, expectedHash)) {
-        const err = new Error('Incorrect Admin password. User was not deleted.');
-        err.statusCode = 401;
-        throw err;
-      }
+      this.verifyAdminPassword(normalizedAdminId, rawAdminPassword, {
+        actionLabel: 'user deletion',
+        failureMessage: 'Incorrect Admin password. User was not deleted.'
+      });
 
       const targetRow = db.prepare('SELECT * FROM mes_users WHERE user_id = ?').get(normalizedTargetId);
       if (!targetRow) {
@@ -243,5 +230,36 @@ export const AuthService = {
       db.exec('ROLLBACK');
       throw error;
     }
+  },
+
+  verifyAdminPassword(adminUserId, adminPassword, options = 'this action') {
+    const actionLabel = typeof options === 'string' ? options : (options?.actionLabel || 'this action');
+    const failureMessage = typeof options === 'object' && options?.failureMessage
+      ? options.failureMessage
+      : 'Incorrect Admin password. Changes were not saved.';
+    const normalizedAdminId = String(adminUserId || '').trim();
+    const rawAdminPassword = String(adminPassword || '');
+    if (!rawAdminPassword) {
+      const err = new Error(`Enter your Admin password to confirm ${actionLabel}.`);
+      err.statusCode = 400;
+      throw err;
+    }
+    const adminRow = db.prepare(`
+      SELECT * FROM mes_users
+      WHERE user_id = ? AND active = 1 AND role = 'SUPER_USER'
+    `).get(normalizedAdminId);
+    if (!adminRow) {
+      const err = new Error('Admin session is invalid.');
+      err.statusCode = 401;
+      throw err;
+    }
+    const actualHash = scryptSync(rawAdminPassword, adminRow.password_salt, PASSWORD_HASH_BYTES);
+    const expectedHash = Buffer.from(adminRow.password_hash, 'hex');
+    if (actualHash.length !== expectedHash.length || !timingSafeEqual(actualHash, expectedHash)) {
+      const err = new Error(failureMessage);
+      err.statusCode = 401;
+      throw err;
+    }
+    return publicUser(adminRow);
   }
 };
