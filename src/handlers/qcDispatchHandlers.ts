@@ -28,6 +28,8 @@ import {
   syncBackendData
 } from '../state/syncService';
 
+const releaseInFlightReqs = new Set<string>();
+
 export function buildQcDispatchRows(): QcDispatchReqRow[] {
   const activeReq = normalizeBaseReqNumber(state.packingWip.selectedBatch);
   const seen = new Set<string>();
@@ -202,7 +204,7 @@ export function attachQCHandlers(): void {
 }
 
 export function openStage5BoxingModal(): void {
-  if (state.currentUser && state.currentUser.role !== 'SUPER_USER') {
+  if (!state.currentUser || state.currentUser.role !== 'SUPER_USER') {
     showToast('Master carton creation and QC are managed by Super User in QC & Dispatch.');
     return;
   }
@@ -575,11 +577,14 @@ export async function dispatchBulkCartons(
       }
     } else {
       const limit = cartonCount != null && cartonCount > 0 ? cartonCount : state.cartons.length;
-      let targets = cartonCount != null
-        ? state.cartons.filter(c => c.shippingMode === 'UNASSIGNED').slice(0, limit)
+      const targets = cartonCount != null
+        ? state.cartons
+            .filter(c => shippingMode === 'UNASSIGNED' ? c.shippingMode !== 'UNASSIGNED' : c.shippingMode === 'UNASSIGNED')
+            .slice(0, limit)
         : state.cartons;
       if (cartonCount != null && targets.length === 0) {
-        targets = state.cartons.slice(0, limit);
+        showToast(shippingMode === 'UNASSIGNED' ? `No assigned cartons to reset on ${req}.` : `No unassigned Ready cartons remain on ${req}.`);
+        return;
       }
       const stamp = shippingMode === 'UNASSIGNED' ? null : new Date().toISOString();
       targets.forEach(c => {
@@ -622,17 +627,45 @@ export async function dispatchAirSeaAllotment(req: string, airCartons: number, s
         await syncBackendData();
       }
     } else {
+      const currentModes = state.cartons.map(c => String(c.shippingMode || 'UNASSIGNED').toUpperCase());
+      const nextModes: Array<'AIR' | 'SEA' | 'UNASSIGNED' | null> = new Array(currentModes.length).fill(null);
+      let keptAir = 0;
+      let keptSea = 0;
+      for (let i = 0; i < currentModes.length; i++) {
+        if (currentModes[i] === 'AIR' && keptAir < airCartons) {
+          nextModes[i] = 'AIR';
+          keptAir += 1;
+        } else if (currentModes[i] === 'SEA' && keptSea < seaCartons) {
+          nextModes[i] = 'SEA';
+          keptSea += 1;
+        }
+      }
+      const pool: number[] = [];
+      for (let i = 0; i < currentModes.length; i++) {
+        if (nextModes[i] === null && currentModes[i] === 'UNASSIGNED') pool.push(i);
+      }
+      for (let i = 0; i < currentModes.length; i++) {
+        if (nextModes[i] === null && currentModes[i] !== 'UNASSIGNED') pool.push(i);
+      }
+      let needAir = airCartons - keptAir;
+      let needSea = seaCartons - keptSea;
+      for (const idx of pool) {
+        if (needAir > 0) {
+          nextModes[idx] = 'AIR';
+          needAir -= 1;
+        } else if (needSea > 0) {
+          nextModes[idx] = 'SEA';
+          needSea -= 1;
+        } else {
+          nextModes[idx] = 'UNASSIGNED';
+        }
+      }
       const stamp = new Date().toISOString();
       state.cartons.forEach((c, idx) => {
-        if (idx < airCartons) {
-          c.shippingMode = 'AIR';
-          c.dispatchedAt = stamp;
-        } else if (idx < airCartons + seaCartons) {
-          c.shippingMode = 'SEA';
-          c.dispatchedAt = stamp;
-        } else {
-          c.shippingMode = 'UNASSIGNED';
-          c.dispatchedAt = null;
+        const nextMode = nextModes[idx] || 'UNASSIGNED';
+        if (nextMode !== currentModes[idx]) {
+          c.shippingMode = nextMode;
+          c.dispatchedAt = nextMode === 'UNASSIGNED' ? null : stamp;
         }
       });
       saveCurrentOrderWipState();
@@ -723,6 +756,7 @@ export function handleQcDispatchAction(action: string, req: string): void {
   }
 
   if (action === 'release') {
+    if (releaseInFlightReqs.has(req)) return;
     const metrics = computeQcDispatchMetrics(row);
     if (row.dispatched) {
       showToast(`${req} is already dispatched.`);
@@ -736,10 +770,18 @@ export function handleQcDispatchAction(action: string, req: string): void {
       showToast(`Box at least one master carton for ${req} before releasing.`);
       return;
     }
+    if (metrics.remaining > 0) {
+      showToast(`Box all ${metrics.remaining} remaining Stage 4 pairs before releasing ${req}.`);
+      return;
+    }
     if (metrics.ready > 0) {
       showToast(`Assign Air or Sea mode to all ${metrics.ready} remaining ready pairs before releasing.`);
       return;
     }
+
+    releaseInFlightReqs.add(req);
+    const releaseBtn = document.getElementById('qcd-release-btn') as HTMLButtonElement | null;
+    if (releaseBtn) releaseBtn.disabled = true;
 
     void (async () => {
       try {
@@ -777,6 +819,11 @@ export function handleQcDispatchAction(action: string, req: string): void {
         showToast(`${req} released for dispatch (Air ${metrics.air} prs, Sea ${metrics.sea} prs).`);
       } catch (err) {
         showToast(err instanceof Error ? err.message : `Unable to release ${req} for dispatch.`);
+      } finally {
+        releaseInFlightReqs.delete(req);
+        if (releaseBtn?.isConnected && !buildQcDispatchRows().find(r => r.reqNumber === req)?.dispatched) {
+          releaseBtn.disabled = false;
+        }
       }
     })();
   }

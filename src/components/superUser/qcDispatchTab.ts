@@ -173,7 +173,7 @@ export function renderQcDispatchTab(ctx: SuperUserRenderContext): string {
   }
 
   const { row: sel, metrics: selMetrics } = selectedEntry;
-  const canRelease = Boolean(!sel.dispatched && sel.finalQcApproved && sel.cartons.length > 0 && selMetrics.ready === 0);
+  const canRelease = Boolean(!sel.dispatched && sel.finalQcApproved && sel.cartons.length > 0 && selMetrics.ready === 0 && selMetrics.remaining === 0);
   let airCartonsCount = 0;
   let seaCartonsCount = 0;
   let airCbm = 0;

@@ -715,24 +715,59 @@ export class PackingService {
 
     if (airCartons != null || seaCartons != null) {
       const allCartons = db.prepare(`
-        SELECT carton_barcode FROM cartons WHERE req_number = ? ORDER BY carton_number ASC
+        SELECT carton_barcode, shipping_mode FROM cartons WHERE req_number = ? ORDER BY carton_number ASC
       `).all(reqNumber);
       const airN = Math.max(0, Math.floor(Number(airCartons || 0)));
       const seaN = Math.max(0, Math.floor(Number(seaCartons || 0)));
       if (airN + seaN > allCartons.length) {
         throw new Error(`Air (${airN}) + Sea (${seaN}) exceeds total boxed cartons (${allCartons.length}).`);
       }
+
+      // Keep existing AIR/SEA assignments up to the requested counts so new allotments only fill UNASSIGNED/surplus slots.
+      const currentModes = allCartons.map(r => String(r.shipping_mode || 'UNASSIGNED').toUpperCase());
+      const nextModes = new Array(allCartons.length).fill(null);
+      let keptAir = 0;
+      let keptSea = 0;
+      for (let i = 0; i < currentModes.length; i++) {
+        if (currentModes[i] === 'AIR' && keptAir < airN) {
+          nextModes[i] = 'AIR';
+          keptAir += 1;
+        } else if (currentModes[i] === 'SEA' && keptSea < seaN) {
+          nextModes[i] = 'SEA';
+          keptSea += 1;
+        }
+      }
+
+      const poolIndices = [];
+      for (let i = 0; i < currentModes.length; i++) {
+        if (nextModes[i] === null && currentModes[i] === 'UNASSIGNED') poolIndices.push(i);
+      }
+      for (let i = 0; i < currentModes.length; i++) {
+        if (nextModes[i] === null && currentModes[i] !== 'UNASSIGNED') poolIndices.push(i);
+      }
+
+      let needAir = airN - keptAir;
+      let needSea = seaN - keptSea;
+      for (const idx of poolIndices) {
+        if (needAir > 0) {
+          nextModes[idx] = 'AIR';
+          needAir -= 1;
+        } else if (needSea > 0) {
+          nextModes[idx] = 'SEA';
+          needSea -= 1;
+        } else {
+          nextModes[idx] = 'UNASSIGNED';
+        }
+      }
+
       const nowIso = new Date().toISOString();
       const updateOne = db.prepare(`
         UPDATE cartons SET shipping_mode = ?, dispatched_at = ? WHERE req_number = ? AND carton_barcode = ?
       `);
       allCartons.forEach((row, idx) => {
-        if (idx < airN) {
-          updateOne.run('AIR', nowIso, reqNumber, row.carton_barcode);
-        } else if (idx < airN + seaN) {
-          updateOne.run('SEA', nowIso, reqNumber, row.carton_barcode);
-        } else {
-          updateOne.run('UNASSIGNED', null, reqNumber, row.carton_barcode);
+        const targetMode = nextModes[idx];
+        if (targetMode !== currentModes[idx]) {
+          updateOne.run(targetMode, targetMode === 'UNASSIGNED' ? null : nowIso, reqNumber, row.carton_barcode);
         }
       });
       return this.getRequisition(reqNumber);
@@ -776,19 +811,21 @@ export class PackingService {
 
     if (cartonCount != null && Number(cartonCount) > 0) {
       const limit = Number(cartonCount);
-      let rows = db.prepare(`
-        SELECT carton_barcode FROM cartons
-        WHERE req_number = ? AND (shipping_mode IS NULL OR shipping_mode = 'UNASSIGNED')
-        ORDER BY carton_number ASC
-        LIMIT ?
-      `).all(reqNumber, limit);
-      if (rows.length === 0) {
-        rows = db.prepare(`
-          SELECT carton_barcode FROM cartons
-          WHERE req_number = ?
-          ORDER BY carton_number ASC
-          LIMIT ?
-        `).all(reqNumber, limit);
+      const rows = mode === 'UNASSIGNED'
+        ? db.prepare(`
+            SELECT carton_barcode FROM cartons
+            WHERE req_number = ? AND shipping_mode IN ('AIR', 'SEA')
+            ORDER BY carton_number ASC
+            LIMIT ?
+          `).all(reqNumber, limit)
+        : db.prepare(`
+            SELECT carton_barcode FROM cartons
+            WHERE req_number = ? AND (shipping_mode IS NULL OR shipping_mode = 'UNASSIGNED')
+            ORDER BY carton_number ASC
+            LIMIT ?
+          `).all(reqNumber, limit);
+      if (rows.length === 0 && mode !== 'UNASSIGNED') {
+        throw new Error(`No unassigned Ready cartons remain on ${reqNumber}.`);
       }
       if (rows.length > 0) {
         const placeholders = rows.map(() => '?').join(',');

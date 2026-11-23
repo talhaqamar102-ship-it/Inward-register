@@ -2534,4 +2534,290 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     expect(runtimeErrors).toEqual([]);
   });
+
+  test('Item 6: Partial-lot release keeps Release button disabled and sends zero dispatch POSTs', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+      const sizes = { '7': 20, '8': 20, '9': 20, '10': 20, '11': 20 };
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Partial Release Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-PART-100',
+        article: 'V3-PARTIAL-REL',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Partial Release Buyer',
+        poNumber: 'PO-PART-100',
+        articleName: 'V3-PARTIAL-REL',
+        colorShade: 'Black',
+        rcvdPairs: 100,
+        sizes,
+        remarks: 'Partial release test GRN'
+      });
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, { sizes });
+      const reqNo = reqRes.req_number;
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 100 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 100, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 100, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 100, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 100 });
+      await post(`/api/qc/${encodeURIComponent(reqNo)}/aql-audit`, { foundDefects: 0, inspectorId: '4402', inspectorName: 'Tariq Mehmood' });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step5-cartons-gated`, {
+        pairsPerCarton: 30,
+        pairsToPack: 60,
+        dimensionsCm: '60x40x35',
+        shippingMode: 'AIR',
+        sealPrefix: 'PART-1'
+      });
+      return { orderId, reqNo };
+    });
+
+    let releasePostCount = 0;
+    page.on('request', req => {
+      if (req.method() === 'POST' && req.url().includes(`/api/wip/${encodeURIComponent(seeded.reqNo)}/dispatch`)) {
+        try {
+          if (req.postDataJSON()?.release) releasePostCount += 1;
+        } catch {
+          // ignore non-JSON
+        }
+      }
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+
+    await expect(page.locator('#qcd-split-summary')).toContainText('Air 60 prs');
+    await expect(page.locator('#qcd-split-summary')).toContainText('Unboxed 40 prs');
+    await expect(page.locator('#qcd-release-btn')).toBeDisabled();
+
+    await page.locator('#qcd-release-btn').click({ force: true });
+    await page.waitForTimeout(250);
+    expect(releasePostCount).toBe(0);
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Item 6: Double-click Release sends only 1 dispatch POST and logs 1 DISPATCH_RELEASE audit event', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+      const sizes = { '7': 20, '8': 20, '9': 20, '10': 20, '11': 20 };
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Double Click Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-DBL-100',
+        article: 'V3-DBL-REL',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Double Click Buyer',
+        poNumber: 'PO-DBL-100',
+        articleName: 'V3-DBL-REL',
+        colorShade: 'Black',
+        rcvdPairs: 100,
+        sizes,
+        remarks: 'Double click release test GRN'
+      });
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, { sizes });
+      const reqNo = reqRes.req_number;
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 100 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 100, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 100, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 100, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 100 });
+      await post(`/api/qc/${encodeURIComponent(reqNo)}/aql-audit`, { foundDefects: 0, inspectorId: '4402', inspectorName: 'Tariq Mehmood' });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step5-cartons-gated`, {
+        pairsPerCarton: 50,
+        pairsToPack: 100,
+        dimensionsCm: '60x40x35',
+        shippingMode: 'AIR',
+        sealPrefix: 'DBL-1'
+      });
+      return { orderId, reqNo };
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+    await expect(page.locator('#qcd-release-btn')).toBeEnabled();
+
+    await page.evaluate(() => { window.print = () => {}; });
+
+    let releasePostCount = 0;
+    await page.route('**/api/wip/*/dispatch', async route => {
+      const postJson = route.request().postDataJSON();
+      if (postJson?.release) {
+        releasePostCount += 1;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      await route.continue();
+    });
+
+    const btnBox = await page.locator('#qcd-release-btn').boundingBox();
+    expect(btnBox).toBeTruthy();
+    await page.mouse.dblclick(btnBox!.x + btnBox!.width / 2, btnBox!.y + btnBox!.height / 2);
+
+    await expect(page.locator('#qcd-release-btn')).toContainText('Dispatched');
+    expect(releasePostCount).toBe(1);
+    await page.click('#modal-close-x');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    const auditRegistry = page.locator('details[data-registry-id="audit_trail"]');
+    await auditRegistry.locator('summary').click();
+    const auditRows = auditRegistry.locator('tbody tr', { hasText: 'DISPATCH_RELEASE' }).filter({ hasText: seeded.reqNo });
+    await expect(auditRows).toHaveCount(1);
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Item 6: Bulk-assign Air/Sea split preserves existing AIR cartons when assigning SEA', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    await authenticateAsSuperUser(page);
+
+    const seeded = await page.evaluate(async () => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+      const sizes = { '7': 30, '8': 30, '9': 30, '10': 30, '11': 30 };
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Bulk Overwrite Buyer',
+        maker: 'Raja',
+        poNumber: 'PO-BULK-150',
+        article: 'V3-BULK-KEEP',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Bulk Overwrite Buyer',
+        poNumber: 'PO-BULK-150',
+        articleName: 'V3-BULK-KEEP',
+        colorShade: 'Black',
+        rcvdPairs: 150,
+        sizes,
+        remarks: 'Bulk overwrite test GRN'
+      });
+      const reqRes = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, { sizes });
+      const reqNo = reqRes.req_number;
+      await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 150 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 150, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 150, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 150, defectPairs: 0 });
+      const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 150 });
+      await post(`/api/qc/${encodeURIComponent(reqNo)}/aql-audit`, { foundDefects: 0, inspectorId: '4402', inspectorName: 'Tariq Mehmood' });
+      // Carton #1 UNASSIGNED, Cartons #2 & #3 AIR
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step5-cartons-gated`, {
+        pairsPerCarton: 50,
+        pairsToPack: 50,
+        dimensionsCm: '60x40x35',
+        shippingMode: 'UNASSIGNED',
+        sealPrefix: 'BLK-U'
+      });
+      await post(`/api/wip/${encodeURIComponent(reqNo)}/step5-cartons-gated`, {
+        pairsPerCarton: 50,
+        pairsToPack: 100,
+        dimensionsCm: '60x40x35',
+        shippingMode: 'AIR',
+        sealPrefix: 'BLK-A'
+      });
+      return { orderId, reqNo };
+    });
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+
+    const rows = page.locator('#qcd-manifest tbody tr');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.nth(0)).toContainText('Ready');
+    await expect(rows.nth(1)).toContainText('AIR');
+    await expect(rows.nth(2)).toContainText('AIR');
+
+    await page.fill('#qcd-air-cartons-input', '2');
+    await expect(page.locator('#qcd-sea-cartons-input')).toHaveValue('1');
+    await page.click('[data-qcd-action="save-air-sea-split"]');
+
+    await expect(rows.nth(0)).toContainText('SEA');
+    await expect(rows.nth(1)).toContainText('AIR');
+    await expect(rows.nth(2)).toContainText('AIR');
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="qc-dispatch"]');
+    await page.selectOption('#qcd-order-select', seeded.orderId);
+    const reloadedRows = page.locator('#qcd-manifest tbody tr');
+    await expect(reloadedRows.nth(0)).toContainText('SEA');
+    await expect(reloadedRows.nth(1)).toContainText('AIR');
+    await expect(reloadedRows.nth(2)).toContainText('AIR');
+    expect(runtimeErrors).toEqual([]);
+  });
 });

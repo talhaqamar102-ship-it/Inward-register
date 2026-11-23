@@ -1,6 +1,6 @@
 {
   "total_files": 384,
-  "total_words": 428422,
+  "total_words": 430176,
   "files": {
     "code": [
       ".agents/skills/ck/commands/forget.mjs",
@@ -82,7 +82,7 @@
       "src/utils/domModalsAndPrint.ts",
       "src/utils/requisition/analyticsAndFormValidators.ts",
       "src/utils/requisition/demoScenarios.ts",
-      "src/utils/requisition/policyRbacAndDemo.ts",
+      "src/utils/requisition/policyAndRbac.ts",
       "src/utils/requisition/sizingAndCatalog.ts",
       "src/utils/requisition/slipBuilders.ts",
       "src/utils/requisition/traceabilityEngine.ts",

@@ -78,6 +78,8 @@ import {
 import { renderSuperUserScreen, renderDashboardVisualGraphs, SuperUserRenderContext } from '../components/superUserView';
 import { renderQcDispatchTab, buildDispatchManifestPrintHtml } from '../components/superUser/qcDispatchTab';
 import { createDemo600PairScenario, replayDemo600PairScenarioStepByStep } from './requisition/demoScenarios';
+import { openStage5BoxingModal } from '../handlers/qcDispatchHandlers';
+import { state } from '../state/appState';
 
 test('R1, 2.8, 3.8, 4.6, 4.7: authoritative size set constant supports standard 7..11 and extended 6..12 plus configurable policy defaults', () => {
   assert.deepEqual(STANDARD_GLOVE_SIZES, ['7', '8', '9', '10', '11']);
@@ -2432,4 +2434,82 @@ test('Super User QC & Dispatch tab renders AQL/Release states and monochrome man
   assert.ok(printHtml.includes('REQ-2026-0002'));
   assert.ok(!printHtml.includes('--su-'));
   assert.equal(/#[0-9a-fA-F]{3,6}/.test(printHtml), false);
+});
+
+test('Item 6: openStage5BoxingModal does not open when state.currentUser is null', () => {
+  const prevDocument = (globalThis as any).document;
+  const prevHtmlElement = (globalThis as any).HTMLElement;
+  const prevUser = state.currentUser;
+  const prevWip = { ...state.packingWip };
+  const prevCartons = state.cartons;
+
+  class MockClassList {
+    private set = new Set<string>();
+    add(...tokens: string[]) { tokens.forEach(t => this.set.add(t)); }
+    remove(...tokens: string[]) { tokens.forEach(t => this.set.delete(t)); }
+    contains(token: string) { return this.set.has(token); }
+    toggle(token: string, force?: boolean) {
+      const next = force !== undefined ? force : !this.set.has(token);
+      if (next) this.set.add(token);
+      else this.set.delete(token);
+      return next;
+    }
+  }
+  class MockElement {
+    id = '';
+    className = '';
+    textContent = '';
+    innerHTML = '';
+    style: Record<string, string> = {};
+    attrs: Record<string, string> = {};
+    classList = new MockClassList();
+    setAttribute(k: string, v: string) { this.attrs[k] = v; }
+    append() {}
+    appendChild() {}
+    remove() {}
+    focus() {}
+    addEventListener() {}
+    querySelectorAll() { return []; }
+    querySelector() { return null; }
+    getClientRects() { return []; }
+  }
+
+  const elements = new Map<string, MockElement>();
+  const globalModal = new MockElement();
+  globalModal.id = 'global-modal';
+  elements.set('global-modal', globalModal);
+  for (const id of ['modal-title', 'modal-body', 'modal-btn-print', 'toast-container', 'direct-print-stage']) {
+    const el = new MockElement();
+    el.id = id;
+    elements.set(id, el);
+  }
+
+  (globalThis as any).HTMLElement = MockElement;
+  (globalThis as any).document = {
+    activeElement: null,
+    body: new MockElement(),
+    getElementById(id: string) { return elements.get(id) || null; },
+    createElement() { return new MockElement(); }
+  };
+
+  try {
+    state.currentUser = null;
+    state.cartons = [];
+    state.packingWip = {
+      ...state.packingWip,
+      selectedBatch: 'REQ-2026-0099',
+      stage4Passed: 100,
+      finalQcApproved: true,
+      outputPairs: 0
+    };
+
+    openStage5BoxingModal();
+    assert.equal(globalModal.classList.contains('open'), false, 'Modal must stay closed when currentUser is null');
+  } finally {
+    state.currentUser = prevUser;
+    state.packingWip = prevWip;
+    state.cartons = prevCartons;
+    (globalThis as any).document = prevDocument;
+    (globalThis as any).HTMLElement = prevHtmlElement;
+  }
 });

@@ -30,7 +30,7 @@ Never read a whole file over ~500 lines.
 | `src\handlers\modals\documentCenterModal.ts` | 189 |
 | `src\handlers\modals\newRequisitionModal.ts` | 323 |
 | `src\handlers\packingHandlers.ts` | 597 |
-| `src\handlers\qcDispatchHandlers.ts` | 826 |
+| `src\handlers\qcDispatchHandlers.ts` | 873 |
 | `src\handlers\repairHandlers.ts` | 546 |
 | `src\handlers\windowActions.ts` | 831 |
 | `src\main.ts` | 425 |
@@ -250,19 +250,19 @@ Never read a whole file over ~500 lines.
 |   ↳ 377 | | section | Section: Material Requisition & Stage 4-5 |
 |   ↳ 540 | | section | Section: New Req, Shift Export & Labels |
 
-## src\handlers\qcDispatchHandlers.ts (826 lines)
+## src\handlers\qcDispatchHandlers.ts (873 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 31–74 | 44 | fn | `buildQcDispatchRows` |
-| 76–122 | 47 | fn | `attachCartonDispatchHandlers` |
-| 125–202 | 78 | fn | `attachQCHandlers` |
-| 204–402 | 199 | fn | `openStage5BoxingModal` |
-| 404–543 | 140 | fn | `openAqlCalculatorModal` |
-| 545–599 | 55 | fn | `dispatchBulkCartons` |
-| 601–645 | 45 | fn | `dispatchAirSeaAllotment` |
-| 647–783 | 137 | fn | `handleQcDispatchAction` |
-| 785–825 | 41 | fn | `attachQcDispatchTabHandlers` |
+| 33–76 | 44 | fn | `buildQcDispatchRows` |
+| 78–124 | 47 | fn | `attachCartonDispatchHandlers` |
+| 127–204 | 78 | fn | `attachQCHandlers` |
+| 206–404 | 199 | fn | `openStage5BoxingModal` |
+| 406–545 | 140 | fn | `openAqlCalculatorModal` |
+| 547–604 | 58 | fn | `dispatchBulkCartons` |
+| 606–678 | 73 | fn | `dispatchAirSeaAllotment` |
+| 680–830 | 151 | fn | `handleQcDispatchAction` |
+| 832–872 | 41 | fn | `attachQcDispatchTabHandlers` |
 
 ## src\handlers\repairHandlers.ts (546 lines)
 
