@@ -268,11 +268,12 @@ apiRouter.post('/wip/:reqNo/step5-cartons-gated', handle((req) => {
 }));
 
 apiRouter.post('/wip/:reqNo/dispatch', handle((req) => {
-  const { role } = getActorMeta(req, 'PACKING_SUPERVISOR');
-  if (!['SUPER_USER', 'PACKING_SUPERVISOR', 'QC_INSPECTOR'].includes(role)) {
+  const { actor, role } = getActorMeta(req);
+  const allowed = req.body?.release ? ['SUPER_USER'] : ['SUPER_USER', 'PACKING_SUPERVISOR', 'QC_INSPECTOR'];
+  if (!allowed.includes(role)) {
     throw Object.assign(new Error('Forbidden: insufficient role permissions for carton dispatch.'), { statusCode: 403 });
   }
-  return PackingService.dispatchCartons(req.params.reqNo, req.body || {});
+  return PackingService.dispatchCartons(req.params.reqNo, { ...(req.body || {}), actor, role });
 }));
 
 // --- FINAL QC INSPECTION ---

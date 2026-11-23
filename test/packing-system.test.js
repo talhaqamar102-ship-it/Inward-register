@@ -157,6 +157,7 @@ describe('Gloves Packing Execution System - End-to-End Test Suite', () => {
     // Re-pack fresh using partial boxing: 100 pairs in 45x35x30 (50/ctn -> 2 cartons) via AIR
     db.prepare(`DELETE FROM cartons WHERE req_number = ?`).run(reqNumber);
     db.prepare(`UPDATE packing_wip SET step5_cartons_packed = 0, step5_pairs_packed = 0 WHERE req_number = ?`).run(reqNumber);
+    db.prepare(`UPDATE glove_requisitions SET status = 'IN_PROGRESS' WHERE req_number = ?`).run(reqNumber);
 
     const airBatch = PackingService.executeStep5SecondPacking(reqNumber, 50, {
       enforcePreStage5AqlGate: true,

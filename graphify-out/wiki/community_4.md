@@ -5,7 +5,7 @@ Cohesion Score: `0.6` • Total Nodes: 42
 ## Nodes in Community
 
 - **src/db.js** (`file:src/db.js`) — `src/db.js:L1` (degree: 55)
-- **SQLite Table: cartons** (`table:cartons`) — `src/db.js:L183` (degree: 46)
+- **SQLite Table: cartons** (`table:cartons`) — `src/db.js:L183` (degree: 47)
 - **initDatabase()** (`fn:src/db.js:initDatabase`) — `src/db.js:L37-L496` (degree: 40)
 - **SQLite Table: alterations** (`table:alterations`) — `src/db.js:L171` (degree: 31)
 - **SQLite Table: customers** (`table:customers`) — `src/db.js:L55` (degree: 26)

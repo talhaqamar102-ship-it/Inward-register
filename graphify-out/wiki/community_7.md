@@ -1,6 +1,6 @@
 # C7: AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)
 
-Cohesion Score: `0.67` • Total Nodes: 550
+Cohesion Score: `0.67` • Total Nodes: 553
 
 ## Nodes in Community
 
@@ -21,7 +21,7 @@ Cohesion Score: `0.67` • Total Nodes: 550
 - **src/handlers/admin/masterRegistryHandlers.ts** (`file:src/handlers/admin/masterRegistryHandlers.ts`) — `src/handlers/admin/masterRegistryHandlers.ts:L1` (degree: 24)
 - **scripts/graphify.ts** (`file:scripts/graphify.ts`) — `scripts/graphify.ts:L1` (degree: 23)
 - **openNewRequisitionModal()** (`fn:src/handlers/modals/newRequisitionModal.ts:openNewRequisitionModal`) — `src/handlers/modals/newRequisitionModal.ts:L15-L322` (degree: 22)
-- **handleQcDispatchAction()** (`fn:src/handlers/qcDispatchHandlers.ts:handleQcDispatchAction`) — `src/handlers/qcDispatchHandlers.ts:L680-L830` (degree: 22)
+- **handleQcDispatchAction()** (`fn:src/handlers/qcDispatchHandlers.ts:handleQcDispatchAction`) — `src/handlers/qcDispatchHandlers.ts:L680-L834` (degree: 22)
 - **attachRepairHandlers()** (`fn:src/handlers/repairHandlers.ts:attachRepairHandlers`) — `src/handlers/repairHandlers.ts:L19-L545` (degree: 19)
 - **buildProjectGraph()** (`fn:scripts/graphify.ts:buildProjectGraph`) — `scripts/graphify.ts:L133-L1008` (degree: 18)
 - **attachAdminOrderCreationHandlers()** (`fn:src/handlers/admin/orderCreationHandlers.ts:attachAdminOrderCreationHandlers`) — `src/handlers/admin/orderCreationHandlers.ts:L225-L869` (degree: 18)
@@ -77,7 +77,7 @@ Cohesion Score: `0.67` • Total Nodes: 550
 - **main()** (`fn:.agents/skills/ck/hooks/session-start.mjs:main`) — `.agents/skills/ck/hooks/session-start.mjs:L83-L219` (degree: 8)
 - **writeGraphifyArtifacts()** (`fn:scripts/graphify.ts:writeGraphifyArtifacts`) — `scripts/graphify.ts:L676-L870` (degree: 8)
 - **syncSizesAndReceived()** (`fn:src/handlers/inwardHandlers.ts:syncSizesAndReceived`) — `src/handlers/inwardHandlers.ts:L55-L207` (degree: 8)
-- **attachQcDispatchTabHandlers()** (`fn:src/handlers/qcDispatchHandlers.ts:attachQcDispatchTabHandlers`) — `src/handlers/qcDispatchHandlers.ts:L832-L872` (degree: 8)
+- **attachQcDispatchTabHandlers()** (`fn:src/handlers/qcDispatchHandlers.ts:attachQcDispatchTabHandlers`) — `src/handlers/qcDispatchHandlers.ts:L836-L876` (degree: 8)
 - **.agents/traces/2026-11-17-catalog-integration-plan.md** (`file:.agents/traces/2026-11-17-catalog-integration-plan.md`) — `.agents/traces/2026-11-17-catalog-integration-plan.md:L1` (degree: 7)
 - **.agents/traces/2026-11-17-slice2-cascading-ui.md** (`file:.agents/traces/2026-11-17-slice2-cascading-ui.md`) — `.agents/traces/2026-11-17-slice2-cascading-ui.md:L1` (degree: 7)
 - **syncAdminOrderDraftFromDom()** (`fn:src/handlers/admin/orderCreationHandlers.ts:syncAdminOrderDraftFromDom`) — `src/handlers/admin/orderCreationHandlers.ts:L115-L152` (degree: 7)
@@ -184,6 +184,7 @@ Cohesion Score: `0.67` • Total Nodes: 550
 - **.agents/skills/unslop/scripts/snapshot.mjs** (`file:.agents/skills/unslop/scripts/snapshot.mjs`) — `.agents/skills/unslop/scripts/snapshot.mjs:L1` (degree: 2)
 - **.agents/skills/unslop/scripts/story-path.mjs** (`file:.agents/skills/unslop/scripts/story-path.mjs`) — `.agents/skills/unslop/scripts/story-path.mjs:L1` (degree: 2)
 - **.agents/workflows/kotlin-test.md** (`file:.agents/workflows/kotlin-test.md`) — `.agents/workflows/kotlin-test.md:L1` (degree: 2)
+- **e2e/z-dispatch-api.spec.ts** (`file:e2e/z-dispatch-api.spec.ts`) — `e2e/z-dispatch-api.spec.ts:L1` (degree: 2)
 - **scripts/gen-main-map.mjs** (`file:scripts/gen-main-map.mjs`) — `scripts/gen-main-map.mjs:L1` (degree: 2)
 - **extractSection()** (`fn:.agents/skills/ck/commands/init.mjs:extractSection`) — `.agents/skills/ck/commands/init.mjs:L35-L39` (degree: 2)
 - **extractSection()** (`fn:.agents/skills/ck/commands/migrate.mjs:extractSection`) — `.agents/skills/ck/commands/migrate.mjs:L26-L30` (degree: 2)
@@ -208,6 +209,7 @@ Cohesion Score: `0.67` • Total Nodes: 550
 - **letters()** (`fn:.agents/skills/unslop/scripts/story.mjs:letters`) — `.agents/skills/unslop/scripts/story.mjs:L169-L197` (degree: 2)
 - **layer()** (`fn:.agents/skills/unslop/scripts/story.mjs:layer`) — `.agents/skills/unslop/scripts/story.mjs:L200-L202` (degree: 2)
 - **put()** (`fn:.agents/skills/unslop/scripts/story.mjs:put`) — `.agents/skills/unslop/scripts/story.mjs:L207-L214` (degree: 2)
+- **seedBoxedReq()** (`fn:e2e/z-dispatch-api.spec.ts:seedBoxedReq`) — `e2e/z-dispatch-api.spec.ts:L20-L25` (degree: 2)
 - **readZipEntries()** (`fn:scripts/build-catalog-seed.mjs:readZipEntries`) — `scripts/build-catalog-seed.mjs:L22-L60` (degree: 2)
 - **normalizeKey()** (`fn:scripts/build-catalog-seed.mjs:normalizeKey`) — `scripts/build-catalog-seed.mjs:L130-L132` (degree: 2)
 - **walk()** (`fn:scripts/gen-main-map.mjs:walk`) — `scripts/gen-main-map.mjs:L12-L22` (degree: 2)
@@ -278,6 +280,7 @@ Cohesion Score: `0.67` • Total Nodes: 550
 - **spacing()** (`fn:.agents/skills/unslop/scripts/story.mjs:spacing`) — `.agents/skills/unslop/scripts/story.mjs:L229-L279` (degree: 1)
 - **details()** (`fn:.agents/skills/unslop/scripts/story.mjs:details`) — `.agents/skills/unslop/scripts/story.mjs:L281-L298` (degree: 1)
 - **authenticateAsSuperUser()** (`fn:e2e/superuser-nav.spec.ts:authenticateAsSuperUser`) — `e2e/superuser-nav.spec.ts:L9-L33` (degree: 1)
+- **authAsAdmin()** (`fn:e2e/z-dispatch-api.spec.ts:authAsAdmin`) — `e2e/z-dispatch-api.spec.ts:L9-L18` (degree: 1)
 - **buildPersistedCatalog()** (`fn:scripts/build-catalog-seed.mjs:buildPersistedCatalog`) — `scripts/build-catalog-seed.mjs:L248-L256` (degree: 1)
 - **interface GraphNode** (`iface:scripts/graphify.ts:GraphNode`) — `scripts/graphify.ts:L29` (degree: 1)
 - **interface GraphEdge** (`iface:scripts/graphify.ts:GraphEdge`) — `scripts/graphify.ts:L42` (degree: 1)

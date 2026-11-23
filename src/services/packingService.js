@@ -49,6 +49,19 @@ function runAtomicWipStep(fn) {
   }
 }
 
+const httpErr = (msg, statusCode = 409) => Object.assign(new Error(msg), { statusCode });
+
+const wholeCount = (v, label) => {
+  if (typeof v === 'string' && v.trim() === '') {
+    throw httpErr(`${label} must be a whole number >= 0.`, 400);
+  }
+  const n = Number(v ?? 0);
+  if (!Number.isInteger(n) || n < 0) {
+    throw httpErr(`${label} must be a whole number >= 0.`, 400);
+  }
+  return n;
+};
+
 export class PackingService {
   // --- INVENTORY LOOKUPS ---
   static getGloveInventory() {
@@ -706,21 +719,41 @@ export class PackingService {
     return this.getRequisition(reqNumber);
   }
 
-  static dispatchCartons(
+  static dispatchCartons(reqNumber, opts = {}) {
+    return runAtomicWipStep(() => this._dispatchCartons(reqNumber, opts));
+  }
+
+  static _dispatchCartons(
     reqNumber,
-    { shippingMode, cartonBarcodes = null, cartonCount = null, airCartons = null, seaCartons = null, release = false } = {}
+    {
+      shippingMode,
+      cartonBarcodes = null,
+      cartonCount = null,
+      airCartons = null,
+      seaCartons = null,
+      release = false,
+      expectedCartons = null,
+      expectedPairs = null,
+      actor = 'System Operator',
+      role = 'SUPER_USER'
+    } = {}
   ) {
     const req = this.getRequisition(reqNumber);
-    if (!req) throw new Error(`Requisition ${reqNumber} not found`);
+    if (!req) throw httpErr(`Requisition ${reqNumber} not found`, 404);
+
+    const reqRow = db.prepare(`SELECT status, order_id FROM glove_requisitions WHERE req_number = ?`).get(reqNumber);
+    if (reqRow?.status === 'DISPATCHED') {
+      throw httpErr(`${reqNumber} is already dispatched; its cartons are locked.`, 409);
+    }
 
     if (airCartons != null || seaCartons != null) {
       const allCartons = db.prepare(`
         SELECT carton_barcode, shipping_mode FROM cartons WHERE req_number = ? ORDER BY carton_number ASC
       `).all(reqNumber);
-      const airN = Math.max(0, Math.floor(Number(airCartons || 0)));
-      const seaN = Math.max(0, Math.floor(Number(seaCartons || 0)));
+      const airN = wholeCount(airCartons, 'Air cartons');
+      const seaN = wholeCount(seaCartons, 'Sea cartons');
       if (airN + seaN > allCartons.length) {
-        throw new Error(`Air (${airN}) + Sea (${seaN}) exceeds total boxed cartons (${allCartons.length}).`);
+        throw httpErr(`Air (${airN}) + Sea (${seaN}) exceeds total boxed cartons (${allCartons.length}).`, 400);
       }
 
       // Keep existing AIR/SEA assignments up to the requested counts so new allotments only fill UNASSIGNED/surplus slots.
@@ -775,26 +808,60 @@ export class PackingService {
 
     if (release) {
       if (!req.wip || req.wip.final_qc_status !== 'APPROVED_DISPATCH') {
-        throw new Error(`Complete AQL 1.5 inspection for ${reqNumber} before releasing.`);
+        throw httpErr(`Complete AQL 1.5 inspection for ${reqNumber} before releasing.`, 409);
       }
-      const allCartons = db.prepare(`SELECT shipping_mode FROM cartons WHERE req_number = ?`).all(reqNumber);
+      const allCartons = db.prepare(`SELECT shipping_mode, pairs_count FROM cartons WHERE req_number = ?`).all(reqNumber);
       if (allCartons.length === 0) {
-        throw new Error(`Box at least one master carton for ${reqNumber} before releasing.`);
+        throw httpErr(`Box at least one master carton for ${reqNumber} before releasing.`, 409);
       }
       const unassigned = allCartons.filter(c => !c.shipping_mode || c.shipping_mode === 'UNASSIGNED').length;
       if (unassigned > 0) {
-        throw new Error(`Assign Air or Sea to all ${unassigned} unassigned carton(s) before releasing.`);
+        throw httpErr(`Assign Air or Sea to all ${unassigned} unassigned carton(s) before releasing.`, 409);
       }
+      const t = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(pairs_count), 0) AS pairs FROM cartons WHERE req_number = ?`).get(reqNumber);
+      const passed = Number(req.wip?.step4_packing_good);
+      if (!Number.isFinite(passed)) {
+        throw httpErr('Stage 4 passed quantity unavailable; cannot release.', 500);
+      }
+      if (t.pairs < passed) {
+        throw httpErr(`${passed - t.pairs} pairs on ${reqNumber} are still unboxed.`, 409);
+      }
+      if (t.pairs > passed) {
+        throw httpErr(`${reqNumber} has ${t.pairs - passed} more boxed pairs than Stage 4 passed.`, 409);
+      }
+      if (
+        (expectedCartons != null && Number(expectedCartons) !== t.n) ||
+        (expectedPairs != null && Number(expectedPairs) !== t.pairs)
+      ) {
+        throw httpErr('Manifest changed since it was opened. Reload and review before releasing.', 409);
+      }
+
+      const airPairs = allCartons
+        .filter(c => String(c.shipping_mode || '').toUpperCase() === 'AIR')
+        .reduce((s, c) => s + Number(c.pairs_count || 0), 0);
+      const seaPairs = allCartons
+        .filter(c => String(c.shipping_mode || '').toUpperCase() === 'SEA')
+        .reduce((s, c) => s + Number(c.pairs_count || 0), 0);
+
       db.prepare(`UPDATE glove_requisitions SET status = 'DISPATCHED' WHERE req_number = ?`).run(reqNumber);
       db.prepare(`
         UPDATE packing_wip SET current_step = 'DISPATCH_APPROVED', updated_at = CURRENT_TIMESTAMP WHERE req_number = ?
       `).run(reqNumber);
+      this.recordAuditLog({
+        actor,
+        role,
+        action: 'DISPATCH_RELEASE',
+        entityId: reqNumber,
+        orderId: reqRow?.order_id || '',
+        beforeSummary: `Boxed ${t.pairs} Prs`,
+        afterSummary: `Released: Air ${airPairs} Prs / Sea ${seaPairs} Prs`
+      });
       return this.getRequisition(reqNumber);
     }
 
     const mode = String(shippingMode || '').toUpperCase();
     if (!['AIR', 'SEA', 'UNASSIGNED'].includes(mode)) {
-      throw new Error(`Invalid shipping mode: ${shippingMode}. Expected AIR, SEA, or UNASSIGNED.`);
+      throw httpErr(`Invalid shipping mode: ${shippingMode}. Expected AIR, SEA, or UNASSIGNED.`, 400);
     }
 
     const dispatchedAt = mode === 'UNASSIGNED' ? null : new Date().toISOString();
@@ -809,8 +876,11 @@ export class PackingService {
       return this.getRequisition(reqNumber);
     }
 
-    if (cartonCount != null && Number(cartonCount) > 0) {
-      const limit = Number(cartonCount);
+    if (cartonCount != null) {
+      const limit = wholeCount(cartonCount, 'Carton count');
+      if (limit <= 0) {
+        throw httpErr('Carton count must be at least 1.', 400);
+      }
       const rows = mode === 'UNASSIGNED'
         ? db.prepare(`
             SELECT carton_barcode FROM cartons
@@ -825,7 +895,7 @@ export class PackingService {
             LIMIT ?
           `).all(reqNumber, limit);
       if (rows.length === 0 && mode !== 'UNASSIGNED') {
-        throw new Error(`No unassigned Ready cartons remain on ${reqNumber}.`);
+        throw httpErr(`No unassigned Ready cartons remain on ${reqNumber}.`, 409);
       }
       if (rows.length > 0) {
         const placeholders = rows.map(() => '?').join(',');

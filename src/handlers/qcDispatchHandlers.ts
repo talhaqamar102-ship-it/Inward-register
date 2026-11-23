@@ -789,7 +789,11 @@ export function handleQcDispatchAction(action: string, req: string): void {
           const res = await fetch(`/api/wip/${encodeURIComponent(req)}/dispatch`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ release: true })
+            body: JSON.stringify({
+              release: true,
+              expectedCartons: row.cartons.length,
+              expectedPairs: metrics.boxed
+            })
           });
           const json = await res.json().catch(() => ({}));
           if (!res.ok || !json.success) {

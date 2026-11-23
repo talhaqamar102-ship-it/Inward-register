@@ -540,6 +540,7 @@
       "method:src/services/packingService.js:PackingService.parseDimensionsCbm",
       "method:src/services/packingService.js:PackingService.executeStep5SecondPacking",
       "method:src/services/packingService.js:PackingService.dispatchCartons",
+      "method:src/services/packingService.js:PackingService._dispatchCartons",
       "method:src/services/packingService.js:PackingService.executeFinalInspection",
       "method:src/services/packingService.js:PackingService.returnAlteration",
       "method:src/services/packingService.js:PackingService.getAlterations",
@@ -993,6 +994,7 @@
       "file:docs/ui-remediation-plan.md",
       "file:e2e/start-test-server.mjs",
       "file:e2e/superuser-nav.spec.ts",
+      "file:e2e/z-dispatch-api.spec.ts",
       "file:package-lock.json",
       "file:package.json",
       "file:playwright.config.ts",
@@ -1077,6 +1079,8 @@
       "fn:.agents/skills/unslop/scripts/story.mjs:spacing",
       "fn:.agents/skills/unslop/scripts/story.mjs:details",
       "fn:e2e/superuser-nav.spec.ts:authenticateAsSuperUser",
+      "fn:e2e/z-dispatch-api.spec.ts:authAsAdmin",
+      "fn:e2e/z-dispatch-api.spec.ts:seedBoxedReq",
       "fn:scripts/build-catalog-seed.mjs:readZipEntries",
       "fn:scripts/build-catalog-seed.mjs:decodeXmlEntities",
       "fn:scripts/build-catalog-seed.mjs:parseSharedStrings",
@@ -1288,10 +1292,10 @@
       "kind": "class",
       "file_type": "code",
       "source_file": "src/services/packingService.js",
-      "source_location": "L52-L2709",
+      "source_location": "L65-L2779",
       "community": 3,
       "community_label": "Packing Hall 5-Stage & AQL Domain Services (src/services)",
-      "degree": 59
+      "degree": 60
     },
     {
       "id": "file:src/handlers/qcDispatchHandlers.ts",
@@ -1360,6 +1364,17 @@
       "degree": 47
     },
     {
+      "id": "table:cartons",
+      "label": "SQLite Table: cartons",
+      "kind": "table",
+      "file_type": "code",
+      "source_file": "src/db.js",
+      "source_location": "L183",
+      "community": 4,
+      "community_label": "SQLite WAL Database & 17-Table Schema (src/db.js)",
+      "degree": 47
+    },
+    {
       "id": "file:src/components/packingHallView.ts",
       "label": "src/components/packingHallView.ts",
       "kind": "file",
@@ -1376,17 +1391,6 @@
       "kind": "file",
       "file_type": "code",
       "source_file": "src/utils/requisitionLogic.test.ts",
-      "source_location": "L1",
-      "community": 1,
-      "community_label": "Requisition & Multi-Order Pure Logic (src/utils)",
-      "degree": 46
-    },
-    {
-      "id": "file:src/utils/requisitionLogic.ts",
-      "label": "src/utils/requisitionLogic.ts",
-      "kind": "file",
-      "file_type": "code",
-      "source_file": "src/utils/requisitionLogic.ts",
       "source_location": "L1",
       "community": 1,
       "community_label": "Requisition & Multi-Order Pure Logic (src/utils)",
