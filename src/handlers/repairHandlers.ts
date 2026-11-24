@@ -112,7 +112,10 @@ export function attachRepairHandlers(): void {
     const qtyNum = parseInt((document.getElementById('defect-qty') as HTMLInputElement)?.value || '0', 10) || 0;
     const targetReq = normalizeBaseReqNumber(batchId);
     const openServerRows = state.defectList.filter(
-      d => d.altId && d.rawStatus === 'SENT_FOR_ALTERATION' && normalizeBaseReqNumber(d.reqNumber || d.id) === targetReq
+      d => d.altId
+        && d.rawStatus === 'SENT_FOR_ALTERATION'
+        && (!d.handoffStage || d.handoffStage === 'PENDING_TAILOR' || d.handoffStage === 'WITH_TAILOR')
+        && normalizeBaseReqNumber(d.reqNumber || d.id) === targetReq
     );
     if (openServerRows.length > 0) {
       const totalOpen = openServerRows.reduce((sum, d) => sum + Number(d.pairsCount || 0), 0);
@@ -163,7 +166,10 @@ export function attachRepairHandlers(): void {
       return;
     }
     const openServerRows = state.defectList.filter(
-      d => d.altId && d.rawStatus === 'SENT_FOR_ALTERATION' && normalizeBaseReqNumber(d.reqNumber || d.id) === targetReq
+      d => d.altId
+        && d.rawStatus === 'SENT_FOR_ALTERATION'
+        && (!d.handoffStage || d.handoffStage === 'PENDING_TAILOR' || d.handoffStage === 'WITH_TAILOR')
+        && normalizeBaseReqNumber(d.reqNumber || d.id) === targetReq
     );
 
     if (openServerRows.length > 0) {
@@ -178,15 +184,16 @@ export function attachRepairHandlers(): void {
           if (remaining <= 0) break;
           const rowPairs = Number(row.pairsCount || 0);
           const pairsCount = Math.min(remaining, rowPairs);
-          const res = await fetch(`/api/alterations/${row.altId}/repair`, {
+          const endpoint = isScrap
+            ? `/api/alterations/${row.altId}/repair`
+            : `/api/alterations/${row.altId}/receive-inward`;
+          const payload = isScrap
+            ? { tailorName: tailor, isScrap: true, deductionRate: 150, pairsCount }
+            : { tailorName: tailor, pairsCount };
+          const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              tailorName: tailor,
-              isScrap,
-              deductionRate: 150,
-              pairsCount
-            })
+            body: JSON.stringify(payload)
           });
           const json = await res.json();
           if (!res.ok || !json.success) {
@@ -199,7 +206,7 @@ export function attachRepairHandlers(): void {
         await syncBackendData();
         showToast(isScrap
           ? `Alteration ${batchId} (${qtyNum} pairs) logged as Scrap.`
-          : `Alteration ${batchId} (${qtyNum} pairs) marked complete and returned to STAGE 1 Checking.`);
+          : `Alteration ${batchId} (${qtyNum} pairs) received at Inward Register.`);
       } catch (err) {
         showToast(err instanceof Error ? err.message : 'Unable to save alteration outcome.');
       }
@@ -299,13 +306,13 @@ export function attachRepairHandlers(): void {
         const effectiveTailor = getTailor(rowTailor) || rowTailor;
         try {
           if (retVal > 0) {
-            const res = await fetch(`/api/alterations/${altId}/repair`, {
+            const res = await fetch(`/api/alterations/${altId}/receive-inward`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ tailorName: effectiveTailor, isScrap: false, deductionRate: 150, pairsCount: retVal })
+              body: JSON.stringify({ tailorName: effectiveTailor, pairsCount: retVal })
             });
             const json = await res.json();
-            if (!res.ok || !json.success) throw new Error(json.error || 'Unable to return repaired pairs.');
+            if (!res.ok || !json.success) throw new Error(json.error || 'Unable to receive repaired pairs at Inward Register.');
           }
           if (scrVal > 0) {
             const res = await fetch(`/api/alterations/${altId}/repair`, {
@@ -319,7 +326,7 @@ export function attachRepairHandlers(): void {
           closeModal();
           saveTailorName(effectiveTailor);
           await syncBackendData();
-          showToast(`Processed ${rowReq}: ${retVal} returned to Stage 1, ${scrVal} scrapped.`);
+          showToast(`Processed ${rowReq}: ${retVal} received at Inward Register, ${scrVal} scrapped.`);
         } catch (err) {
           showToast(err instanceof Error ? err.message : 'Unable to save split outcome.');
         } finally {
@@ -329,10 +336,10 @@ export function attachRepairHandlers(): void {
     });
   });
 
-  document.querySelectorAll<HTMLElement>('[data-alt-row-return], [data-alt-row-scrap]').forEach(btn => {
+  document.querySelectorAll<HTMLElement>('[data-alt-row-receive], [data-alt-row-scrap]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const isScrap = btn.hasAttribute('data-alt-row-scrap');
-      const altId = Number(btn.getAttribute(isScrap ? 'data-alt-row-scrap' : 'data-alt-row-return') || 0);
+      const altId = Number(btn.getAttribute(isScrap ? 'data-alt-row-scrap' : 'data-alt-row-receive') || 0);
       if (!altId) return;
       const qtyInput = document.querySelector<HTMLInputElement>(`[data-alt-qty-id="${altId}"]`);
       const maxPairs = Number(qtyInput?.getAttribute('max') || 0);
@@ -342,20 +349,32 @@ export function attachRepairHandlers(): void {
         return;
       }
       const rowTailor = btn.getAttribute('data-alt-tailor') || '';
-      const tailor = getTailor(rowTailor || (isScrap ? 'Scrap Authority' : 'Supervisor A'));
+      const tailor = isScrap
+        ? (rowTailor && rowTailor !== 'Unassigned' ? rowTailor : getTailor('Scrap Authority'))
+        : (rowTailor && rowTailor !== 'Unassigned' ? rowTailor : getTailor(''));
+      if (!isScrap && !tailor) {
+        showToast('Assign a tailor first before receiving repaired pairs at Inward Register.');
+        return;
+      }
       try {
-        const res = await fetch(`/api/alterations/${altId}/repair`, {
+        const endpoint = isScrap
+          ? `/api/alterations/${altId}/repair`
+          : `/api/alterations/${altId}/receive-inward`;
+        const payload = isScrap
+          ? { tailorName: tailor, isScrap: true, deductionRate: 150, pairsCount }
+          : { tailorName: tailor, pairsCount };
+        const res = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tailorName: tailor, isScrap, deductionRate: 150, pairsCount })
+          body: JSON.stringify(payload)
         });
         const json = await res.json();
         if (!res.ok || !json.success) {
           throw new Error(json.error || 'Unable to update alteration record.');
         }
-        saveTailorName(tailor);
+        if (tailor && tailor !== 'Scrap Authority') saveTailorName(tailor);
         await syncBackendData();
-        showToast(json.data?.message || (isScrap ? `${pairsCount} pairs logged as Scrap.` : `${pairsCount} pairs returned to STAGE 1 Checking.`));
+        showToast(json.data?.message || (isScrap ? `${pairsCount} pairs logged as Scrap.` : `${pairsCount} pairs received at Inward Register.`));
       } catch (err) {
         showToast(err instanceof Error ? err.message : 'Unable to update alteration record.');
       }
@@ -418,20 +437,20 @@ export function attachRepairHandlers(): void {
       const isScrap = btn.hasAttribute('data-alt-scrap-id');
       const altId = Number(btn.getAttribute(isScrap ? 'data-alt-scrap-id' : 'data-alt-return-id') || 0);
       if (!altId) return;
-      const tailor = getTailor(isScrap ? 'Scrap Authority' : 'Supervisor A');
+      const tailor = getTailor(isScrap ? 'Scrap Authority' : '');
       try {
-        const res = await fetch(`/api/alterations/${altId}/repair`, {
+        const res = await fetch(isScrap ? `/api/alterations/${altId}/repair` : `/api/alterations/${altId}/receive-inward`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tailorName: tailor, isScrap, deductionRate: 150 })
+          body: JSON.stringify(isScrap ? { tailorName: tailor, isScrap: true, deductionRate: 150 } : { tailorName: tailor })
         });
         const json = await res.json();
         if (!res.ok || !json.success) {
           throw new Error(json.error || 'Unable to update alteration record.');
         }
-        saveTailorName(tailor);
+        if (tailor) saveTailorName(tailor);
         await syncBackendData();
-        showToast(json.data?.message || (isScrap ? `Alteration #${altId} logged as Scrap.` : `Alteration #${altId} returned to STAGE 1 Checking.`));
+        showToast(json.data?.message || (isScrap ? `Alteration #${altId} logged as Scrap.` : `Alteration #${altId} received at Inward Register.`));
       } catch (err) {
         showToast(err instanceof Error ? err.message : 'Unable to update alteration record.');
       }

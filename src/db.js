@@ -673,6 +673,37 @@ function migrateDatabase() {
     if (!altCols.includes('is_scrapped')) {
       db.exec(`ALTER TABLE alterations ADD COLUMN is_scrapped INTEGER DEFAULT 0`);
     }
+    if (!altCols.includes('tailor_assigned')) {
+      db.exec(`ALTER TABLE alterations ADD COLUMN tailor_assigned INTEGER DEFAULT 0`);
+    }
+    if (!altCols.includes('assigned_at')) {
+      db.exec(`ALTER TABLE alterations ADD COLUMN assigned_at DATETIME`);
+    }
+    if (!altCols.includes('handoff_stage')) {
+      db.exec(`ALTER TABLE alterations ADD COLUMN handoff_stage TEXT DEFAULT 'PENDING_TAILOR'`);
+      db.exec(`
+        UPDATE alterations
+        SET handoff_stage = CASE
+              WHEN COALESCE(is_scrapped, 0) = 1 THEN 'SCRAPPED'
+              WHEN status = 'RETURNED_TO_CHECKING' THEN 'REISSUED_TO_PACKING'
+              WHEN COALESCE(TRIM(tailor_name), '') NOT IN ('', 'Supervisor A') THEN 'WITH_TAILOR'
+              ELSE 'PENDING_TAILOR'
+            END,
+            tailor_assigned = CASE
+              WHEN COALESCE(TRIM(tailor_name), '') NOT IN ('', 'Supervisor A') THEN 1
+              ELSE 0
+            END
+      `);
+    }
+    if (!altCols.includes('inward_received_at')) {
+      db.exec(`ALTER TABLE alterations ADD COLUMN inward_received_at DATETIME`);
+    }
+    if (!altCols.includes('reissue_requested_at')) {
+      db.exec(`ALTER TABLE alterations ADD COLUMN reissue_requested_at DATETIME`);
+    }
+    if (!altCols.includes('reissued_at')) {
+      db.exec(`ALTER TABLE alterations ADD COLUMN reissued_at DATETIME`);
+    }
   }
 
   // cartons

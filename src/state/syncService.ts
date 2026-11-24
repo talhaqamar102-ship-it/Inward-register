@@ -184,7 +184,11 @@ export function mapServerRequisitionToWip(requisition: any): typeof state.packin
     matReqNumber: requisition.materialReq?.mat_req_number || '',
     altReqNo: getAlterationReqNumber(reqNumber),
     mreqQty: `${stage3Passed} Sets`,
-    mreqStatus: requisition.materialReq?.status || (Number(wip.step4_materials_issued || 0) === 1 ? 'ISSUED' : (stage3Passed > 0 ? 'Ready' : 'Pending Stage 3')),
+    mreqCoveredPairs: Number(requisition.materialReqCoveredPairs || 0),
+    mreqIssuedPairs: Number(requisition.materialReqIssuedPairs || 0),
+    mreqStatus: Number(wip.step4_materials_issued || 0) === 1
+      ? 'ISSUED'
+      : (requisition.materialReq?.status || (stage3Passed > 0 ? 'Ready' : 'Pending Stage 3')),
     stage4In,
     stage4Passed,
     stage4Pending: Math.max(0, stage4In - stage4Passed),
@@ -285,23 +289,57 @@ export function applyAlterationsPayload(rows: any[]): void {
   state.dropdownOptions.defectBatchIds = Array.from(new Set(rows.map((alt: any) =>
     getAlterationReqNumber(alt.req_number || state.packingWip.selectedBatch)
   )));
-  state.defectList = rows.map((alt: any) => ({
-    altId: Number(alt.id) || undefined,
-    id: getAlterationReqNumber(alt.req_number || state.packingWip.selectedBatch),
-    reqNumber: alt.req_number || undefined,
-    pairsCount: Number(alt.pairs_count || 0),
-    rawStatus: alt.status || undefined,
-    date: alt.sent_at ? alt.sent_at.split(' ')[0] : formatCurrentDateDDMMYYYY(),
-    origin: (alt.source_stage || 'Step 1').replace(/_/g, ' '),
-    article: alt.product_name || '---',
-    po: alt.req_number || '---',
-    defectClass: alt.defect_reason || 'Workmanship Defect',
-    qty: `${alt.pairs_count} Prs`,
-    tailor: alt.tailor_name || 'Supervisor A',
-    status: alt.is_scrapped ? 'Scrapped' : (alt.status === 'RETURNED_TO_CHECKING' ? 'Completed' : 'In Rework'),
-    route: 'Auto-Return to Stage 1 Checking',
-    actionText: alt.status === 'RETURNED_TO_CHECKING' ? 'Verified' : 'Update'
-  }));
+  state.defectList = rows.map((alt: any) => {
+    const rawTailor = String(alt.tailor_name || '').trim();
+    const isScrapped = Boolean(alt.is_scrapped) || alt.handoff_stage === 'SCRAPPED';
+    const handoffStage = String(
+      alt.handoff_stage ||
+      (isScrapped
+        ? 'SCRAPPED'
+        : alt.status === 'RETURNED_TO_CHECKING'
+          ? 'REISSUED_TO_PACKING'
+          : (alt.tailor_assigned || (rawTailor && rawTailor !== 'Supervisor A'))
+            ? 'WITH_TAILOR'
+            : 'PENDING_TAILOR')
+    );
+    const tailorAssigned = Boolean(alt.tailor_assigned) || handoffStage !== 'PENDING_TAILOR';
+    const tailor = tailorAssigned ? rawTailor : '';
+    const status =
+      handoffStage === 'SCRAPPED' ? 'Scrapped'
+      : handoffStage === 'REISSUED_TO_PACKING' ? 'Completed'
+      : handoffStage === 'RECEIVED_AT_INWARD' ? 'At Inward'
+      : handoffStage === 'REISSUE_REQUESTED' ? 'Re-Issue Requested'
+      : handoffStage === 'WITH_TAILOR' ? 'In Rework'
+      : 'Pending Tailor';
+    const route =
+      handoffStage === 'SCRAPPED' ? 'Scrap Ledger'
+      : handoffStage === 'REISSUED_TO_PACKING' ? 'Re-issued to Stage 1 Checking'
+      : handoffStage === 'REISSUE_REQUESTED' ? 'Inward Register REQ Queue -> Stage 1'
+      : handoffStage === 'RECEIVED_AT_INWARD' ? 'At Inward Register -> Packing Hall REQ'
+      : handoffStage === 'WITH_TAILOR' ? 'With Tailor -> Inward Register'
+      : 'Assign Tailor -> Inward Register';
+
+    return {
+      altId: Number(alt.id) || undefined,
+      id: getAlterationReqNumber(alt.req_number || state.packingWip.selectedBatch),
+      reqNumber: alt.req_number || undefined,
+      orderId: alt.order_id || undefined,
+      pairsCount: Number(alt.pairs_count || 0),
+      rawStatus: alt.status || undefined,
+      handoffStage,
+      tailorAssigned,
+      date: alt.sent_at ? alt.sent_at.split(' ')[0] : formatCurrentDateDDMMYYYY(),
+      origin: (alt.source_stage || 'Step 1').replace(/_/g, ' '),
+      article: alt.product_name || '---',
+      po: alt.req_number || '---',
+      defectClass: alt.defect_reason || 'Workmanship Defect',
+      qty: `${alt.pairs_count} Prs`,
+      tailor,
+      status,
+      route,
+      actionText: handoffStage === 'REISSUED_TO_PACKING' ? 'Verified' : 'Update'
+    };
+  });
 }
 
 // Dynamic backend SQLite synchronization (parallel fetch + catalog caching)
@@ -380,7 +418,7 @@ export async function syncBackendData(options: { manual?: boolean; forceCatalog?
       })());
     }
 
-    if (role === 'ALTERATION_LEAD' || role === 'INWARD_CLERK') {
+    if (role === 'ALTERATION_LEAD' || role === 'INWARD_CLERK' || role === 'PACKING_SUPERVISOR') {
       syncTasks.push((async () => {
         try {
           const res = await fetch('/api/alterations');

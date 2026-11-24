@@ -39,13 +39,13 @@ SQLite via node:sqlite (`data/gloves_packing.db`), Docker runtime
 
 **Everything Claude Code (`affaan-m/ECC`)** is installed in `.agents/` with always-on rule `.agents/rules/ecc-harness.md`:
 - Use ECC skills/workflows (`tdd-workflow`, `e2e-testing`, `browser-qa`, `click-path-audit`, `verification-loop`, `delivery-gate`) whenever their scope applies.
-- Never skip browser verification or leave manual browser inspection steps for the user when UI, CSS, DOM, nav, auth, forms, or interactive handlers change — add/run automated Playwright assertions (`npm run test:e2e`) and observe all checks green after final edits.
+- Never skip browser verification or leave manual browser inspection steps for the user when UI, CSS, DOM, nav, auth, forms, or interactive handlers change — iterate with targeted `npx playwright test -g "<test name>"` runs during edits, and run the full `npm run verify:all` gate (all E2E tests + `graphify`) once at the end of the batch before committing or reporting completion.
 
 ## Graphify Knowledge Graph Harness (`/graphify`)
 
 This project maintains a persistent whole-project knowledge graph in `graphify-out/` (`graph.json`, `GRAPH_REPORT.md`, `wiki/index.md`, `graph.html`), powered by `.claude/skills/graphify/SKILL.md` and `scripts/graphify.ts`:
 1. **Read Before Edit**: Consult `graphify-out/GRAPH_REPORT.md`, `graphify-out/wiki/index.md`, or run `npm run graphify:query -- "<question>"` (`npx tsx scripts/graphify.ts query "<question>"`) before reading raw files. The bare `graphify` binary is not on PATH here; always use the project script.
-2. **Mandatory Post-Change Update**: Every time code or schema files are modified, the `PostToolUse` (`Edit|Write`) hook and quality gate automatically run `npx tsx scripts/graphify.ts update .` (`npm run graphify`) so `graphify-out/graph.json` and `graphify-out/GRAPH_REPORT.md` stay synchronized with the latest AST and SQLite schema.
+2. **End-of-Batch Graph Update**: Run `npx tsx scripts/graphify.ts update .` (`npm run graphify`, included in `npm run verify:all`) once at the end of a task/batch rather than via a per-edit `PostToolUse` hook, so `graphify-out/graph.json` and `graphify-out/GRAPH_REPORT.md` stay synchronized without paying a `tsx` launch cost on every file save.
 
 ## unslop Design Craft Harness
 

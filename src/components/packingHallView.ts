@@ -20,7 +20,10 @@ export interface PackingHallDefectRow {
   origin: string;
   defectClass: string;
   qty: string;
+  pairsCount?: number;
   status: string;
+  route?: string;
+  handoffStage?: string;
 }
 
 export interface PackingHallCartonRow {
@@ -195,8 +198,8 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
       <!-- 5-Stage WIP Floor Process Pipeline -->
       <section>
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
-          <h2 style="font-size: 12.5px; font-weight: 700; color: var(--ink-950); text-transform: uppercase; letter-spacing: 0.04em; margin: 0;">
-            5-Stage WIP Floor Process Pipeline
+          <h2 style="font-size: 13px; font-weight: 600; color: var(--ink-950); margin: 0;">
+            WIP process pipeline
           </h2>
           <span style="font-size: 11.5px; color: var(--ink-500);">Active Requisition: <strong>${baseReq}</strong></span>
         </div>
@@ -225,111 +228,122 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
           const stage2Rem = remainingStagePairs(wip.stage2In, wip.stage2Passed, wip.stage2Defects);
           const stage3Rem = remainingStagePairs(wip.stage3In, wip.stage3Passed, wip.stage3Defects);
           return `
-        <div class="packing-pipeline-grid">
+        <div class="wip-rail" data-testid="wip-rail">
           <!-- STAGE 1: Checking / Inspection -->
-          <div class="pipeline-stage-card ${activeStage === 'STEP_1' ? 'stage-active' : ''}">
-            <div>
-              <div class="pipeline-stage-header">
-                <span>Stage 1: Checking</span>
-                ${activeStage === 'STEP_1' ? '<span class="stage-active-badge">Active</span>' : ''}
-              </div>
-              <div class="pipeline-stage-metric"><span>Available In:</span> <strong id="wip-stg1-in">${stage1Rem.toLocaleString()}</strong></div>
-              <div class="pipeline-stage-metric"><span>Passed:</span> <strong id="wip-stg1-passed">${wip.stage1Passed.toLocaleString()}</strong></div>
-              <div class="pipeline-stage-metric"><span>Defects:</span> <strong id="wip-stg1-defects">${wip.stage1Defects.toLocaleString()}</strong></div>
+          <div class="wip-node ${activeStage === 'STEP_1' ? 'is-active' : ''} ${stage1Rem <= 0 && wip.stage1Passed > 0 ? 'is-complete' : ''}" data-testid="wip-node-1">
+            <span class="wip-node-num">1</span>
+            <div class="wip-node-body">
+              <div class="wip-node-title">Checking</div>
+              <div class="wip-node-metric"><span>In</span><strong id="wip-stg1-in">${stage1Rem.toLocaleString()}</strong></div>
+              <div class="wip-node-metric"><span>Passed</span><strong id="wip-stg1-passed">${wip.stage1Passed.toLocaleString()}</strong></div>
+              <div class="wip-node-metric"><span>Defects</span><strong id="wip-stg1-defects">${wip.stage1Defects.toLocaleString()}</strong></div>
+              <button type="button" class="${activeStage === 'STEP_1' ? 'btn-primary' : 'btn-outline'} wip-node-action" id="btn-wip-step1" ${awaitingInwardIssue || stage1Rem <= 0 ? 'disabled' : ''}>
+                ${stage1Rem <= 0 && wip.stage1Passed > 0 ? 'Checking complete' : 'Record checking'}
+              </button>
             </div>
-            <button type="button" class="${activeStage === 'STEP_1' ? 'btn-primary' : 'btn-outline'}" style="width: 100%; margin-top: 10px; font-size: 12px; padding: 6px; justify-content: center;" id="btn-wip-step1" ${awaitingInwardIssue || stage1Rem <= 0 ? 'disabled' : ''}>
-              ${stage1Rem <= 0 && wip.stage1Passed > 0 ? 'Stage 1 Complete' : 'Process Stage 1'}
-            </button>
           </div>
 
           <!-- STAGE 2: Ironing & Brushing -->
-          <div class="pipeline-stage-card ${activeStage === 'STEP_2' ? 'stage-active' : ''}">
-            <div>
-              <div class="pipeline-stage-header">
-                <span>Stage 2: Ironing</span>
-                ${activeStage === 'STEP_2' ? '<span class="stage-active-badge">Active</span>' : ''}
-              </div>
-              <div class="pipeline-stage-metric"><span>Available In:</span> <strong id="wip-stg2-in">${stage2Rem.toLocaleString()}</strong></div>
-              <div class="pipeline-stage-metric"><span>Passed:</span> <strong id="wip-stg2-passed">${wip.stage2Passed.toLocaleString()}</strong></div>
-              <div class="pipeline-stage-metric"><span>Defects:</span> <strong id="wip-stg2-defects">${wip.stage2Defects.toLocaleString()}</strong></div>
+          <div class="wip-node ${activeStage === 'STEP_2' ? 'is-active' : ''} ${stage2Rem <= 0 && wip.stage2Passed > 0 ? 'is-complete' : ''}" data-testid="wip-node-2">
+            <span class="wip-node-num">2</span>
+            <div class="wip-node-body">
+              <div class="wip-node-title">Ironing</div>
+              <div class="wip-node-metric"><span>In</span><strong id="wip-stg2-in">${stage2Rem.toLocaleString()}</strong></div>
+              <div class="wip-node-metric"><span>Passed</span><strong id="wip-stg2-passed">${wip.stage2Passed.toLocaleString()}</strong></div>
+              <div class="wip-node-metric"><span>Defects</span><strong id="wip-stg2-defects">${wip.stage2Defects.toLocaleString()}</strong></div>
+              <button type="button" class="${activeStage === 'STEP_2' ? 'btn-primary' : 'btn-outline'} wip-node-action" id="btn-wip-step2" ${stage2Rem <= 0 ? 'disabled' : ''}>
+                ${stage2Rem <= 0 && wip.stage2Passed > 0 ? 'Ironing complete' : 'Record ironing'}
+              </button>
             </div>
-            <button type="button" class="${activeStage === 'STEP_2' ? 'btn-primary' : 'btn-outline'}" style="width: 100%; margin-top: 10px; font-size: 12px; padding: 6px; justify-content: center;" id="btn-wip-step2" ${stage2Rem <= 0 ? 'disabled' : ''}>
-              ${stage2Rem <= 0 && wip.stage2Passed > 0 ? 'Stage 2 Complete' : 'Process Stage 2'}
-            </button>
           </div>
 
           <!-- STAGE 3: Pair Matching -->
-          <div class="pipeline-stage-card ${activeStage === 'STEP_3' ? 'stage-active' : ''}">
-            <div>
-              <div class="pipeline-stage-header">
-                <span>Stage 3: Matching</span>
-                ${activeStage === 'STEP_3' ? '<span class="stage-active-badge">Active</span>' : ''}
-              </div>
-              <div class="pipeline-stage-metric"><span>Available In:</span> <strong id="wip-stg3-in">${stage3Rem.toLocaleString()}</strong></div>
-              <div class="pipeline-stage-metric"><span>Matched:</span> <strong id="wip-stg3-passed">${wip.stage3Passed.toLocaleString()} Prs</strong></div>
-              <div class="pipeline-stage-metric"><span>Defects:</span> <strong id="wip-stg3-defects">${wip.stage3Defects.toLocaleString()}</strong></div>
+          <div class="wip-node ${activeStage === 'STEP_3' ? 'is-active' : ''} ${stage3Rem <= 0 && wip.stage3Passed > 0 ? 'is-complete' : ''}" data-testid="wip-node-3">
+            <span class="wip-node-num">3</span>
+            <div class="wip-node-body">
+              <div class="wip-node-title">Matching</div>
+              <div class="wip-node-metric"><span>In</span><strong id="wip-stg3-in">${stage3Rem.toLocaleString()}</strong></div>
+              <div class="wip-node-metric"><span>Matched</span><strong id="wip-stg3-passed">${wip.stage3Passed.toLocaleString()}</strong></div>
+              <div class="wip-node-metric"><span>Defects</span><strong id="wip-stg3-defects">${wip.stage3Defects.toLocaleString()}</strong></div>
+              <button type="button" class="${activeStage === 'STEP_3' ? 'btn-primary' : 'btn-outline'} wip-node-action" id="btn-wip-step3" ${stage3Rem <= 0 ? 'disabled' : ''}>
+                ${stage3Rem <= 0 && wip.stage3Passed > 0 ? 'Matching complete' : 'Record matching'}
+              </button>
             </div>
-            <button type="button" class="${activeStage === 'STEP_3' ? 'btn-primary' : 'btn-outline'}" style="width: 100%; margin-top: 10px; font-size: 12px; padding: 6px; justify-content: center;" id="btn-wip-step3" ${stage3Rem <= 0 ? 'disabled' : ''}>
-              ${stage3Rem <= 0 && wip.stage3Passed > 0 ? 'Stage 3 Complete' : 'Process Stage 3'}
-            </button>
           </div>
 
-          <!-- MATERIAL REQUISITION SLIP GENERATOR (STAGE-3 GATED) -->
-          <div class="pipeline-stage-card ${stage3Cleared && !mreqIssuedForStage4 ? 'stage-active' : ''}" style="background: var(--ink-50); border-style: dashed;">
-            <div>
-              <div class="pipeline-stage-header">
-                <span>Material Requisition</span>
-                ${!stage3Cleared
-                  ? '<span class="status-pill" style="font-size: 10.5px;">Clear Stage 3</span>'
-                  : (mreqIssuedForStage4 ? '<span class="status-pill" style="font-size: 10.5px;">Issued</span>' : '<span class="stage-active-badge">Ready</span>')}
-              </div>
-              <div class="pipeline-stage-metric"><span>Requisition:</span> <strong id="wip-mreq-no">${baseReq}</strong></div>
-              <div class="pipeline-stage-metric"><span>Sets:</span> <strong id="wip-mreq-qty">${wip.stage3Passed.toLocaleString()} Sets</strong></div>
-              <div class="pipeline-stage-metric"><span>Article:</span> <strong>${wip.article || '---'}</strong></div>
+          <!-- MATERIAL REQUISITION SLIP: a document, not a stage -->
+          <div class="wip-mreq-slip ${stage3Cleared && !mreqIssuedForStage4 ? 'is-ready' : ''} ${mreqIssuedForStage4 ? 'is-issued' : ''}" data-testid="wip-mreq-gate">
+            <div class="wip-slip-head">
+              <span class="wip-slip-label">Material requisition</span>
+              <span class="wip-slip-state">${!stage3Cleared ? 'Awaiting stage 3' : (mreqIssuedForStage4 ? 'Issued' : 'Ready')}</span>
             </div>
-            <div style="display: flex; gap: 8px; margin-top: 10px;">
-              <button type="button" class="btn-outline" style="flex: 1; justify-content: center;" id="btn-wip-generate-mreq-slip" ${stage3Cleared ? '' : 'disabled title="Complete Stage 3 (Pair Matching) first."'}>Generate Slip</button>
-              <button type="button" class="btn-primary" style="flex: 1; justify-content: center;" id="btn-wip-print-mreq-slip" ${stage3Cleared ? '' : 'disabled title="Complete Stage 3 (Pair Matching) first."'}>Print Slip</button>
+            <div class="wip-slip-metric"><span>Requisition</span><strong id="wip-mreq-no">${baseReq}</strong></div>
+            <div class="wip-slip-metric wip-slip-qty"><span>Sets</span><strong id="wip-mreq-qty">${wip.stage3Passed.toLocaleString()} Sets</strong></div>
+            <div class="wip-slip-metric"><span>On issued slips</span><strong id="wip-mreq-covered">${(wip.mreqIssuedPairs || 0).toLocaleString()} / ${wip.stage3Passed.toLocaleString()}</strong></div>
+            <div class="wip-slip-metric"><span>Article</span><strong>${wip.article || '---'}</strong></div>
+            <div class="wip-slip-actions">
+              <button type="button" class="btn-outline wip-slip-btn" id="btn-wip-generate-mreq-slip" ${stage3Cleared ? '' : 'disabled title="Match at least one pair in Stage 3 first."'}>Generate slip</button>
+              <button type="button" class="btn-primary wip-slip-btn" id="btn-wip-print-mreq-slip" ${stage3Cleared ? '' : 'disabled title="Match at least one pair in Stage 3 first."'}>Print slip</button>
             </div>
           </div>
 
           <!-- STAGE 4: 1st Packing -->
-          <div class="pipeline-stage-card ${activeStage === 'STEP_4' && mreqIssuedForStage4 ? 'stage-active' : ''}">
-            <div>
-              <div class="pipeline-stage-header">
-                <span>Stage 4: 1st Packing</span>
-                ${awaitingFinalQc
-                  ? '<span class="stage-active-badge">Awaiting QC</span>'
-                  : (!mreqIssuedForStage4
-                    ? '<span class="status-pill" style="font-size: 10.5px;">Await Mat. Req</span>'
-                    : (activeStage === 'STEP_4' ? '<span class="stage-active-badge">Active</span>' : ''))}
-              </div>
-              <div class="pipeline-stage-metric"><span>Polybag In:</span> <strong id="wip-stg4-in">${wip.stage4In.toLocaleString()} prs</strong></div>
-              <div class="pipeline-stage-metric"><span>Packaged:</span> <strong id="wip-stg4-passed">${wip.stage4Passed.toLocaleString()} Prs</strong></div>
-              <div class="pipeline-stage-metric"><span>Pending:</span> <strong id="wip-stg4-pending">${wip.stage4Pending}</strong></div>
+          <div class="wip-node ${activeStage === 'STEP_4' && mreqIssuedForStage4 ? 'is-active' : ''} ${wip.stage4Passed > 0 ? 'is-complete' : ''}" data-testid="wip-node-4">
+            <span class="wip-node-num">4</span>
+            <div class="wip-node-body">
+              <div class="wip-node-title">1st packing</div>
+              <div class="wip-node-metric"><span>In</span><strong id="wip-stg4-in">${wip.stage4In.toLocaleString()}</strong></div>
+              <div class="wip-node-metric"><span>Packed</span><strong id="wip-stg4-passed">${wip.stage4Passed.toLocaleString()}</strong></div>
+              <div class="wip-node-metric"><span>Pending</span><strong id="wip-stg4-pending">${wip.stage4Pending}</strong></div>
+              <button type="button" class="${activeStage === 'STEP_4' && mreqIssuedForStage4 && !awaitingFinalQc ? 'btn-primary' : 'btn-outline'} wip-node-action" id="btn-wip-step4" ${!mreqIssuedForStage4 || awaitingFinalQc || wip.stage4Pending <= 0 ? 'disabled' : ''}>
+                ${awaitingFinalQc || stage5Ready || (wip.stage4Passed > 0 && wip.stage4Pending === 0) ? '1st packing complete' : 'Record 1st packing'}
+              </button>
             </div>
-            <button type="button" class="${activeStage === 'STEP_4' && mreqIssuedForStage4 && !awaitingFinalQc ? 'btn-primary' : 'btn-outline'}" style="width: 100%; margin-top: 10px; font-size: 12px; padding: 6px; justify-content: center;" id="btn-wip-step4" ${!mreqIssuedForStage4 || awaitingFinalQc || wip.stage4Pending <= 0 ? 'disabled' : ''}>
-              ${awaitingFinalQc || stage5Ready || (wip.stage4Passed > 0 && wip.stage4Pending === 0) ? '1st Packing Complete' : 'Record 1st Packing'}
-            </button>
           </div>
 
           <!-- STAGE 5: 2nd Packing -->
-          <div class="pipeline-stage-card ${activeStage === 'STEP_5' ? 'stage-active' : ''}">
-            <div>
-              <div class="pipeline-stage-header">
-                <span>Stage 5: Master Cartons</span>
-                ${awaitingFinalQc
-                  ? '<span class="status-pill" style="font-size: 10.5px;">Locked (Await AQL 1.5)</span>'
-                  : (activeStage === 'STEP_5' ? '<span class="stage-active-badge">Active</span>' : '')}
-              </div>
-              <div class="pipeline-stage-metric"><span>Spec:</span> <strong>30 Prs / Ctn</strong></div>
-              <div class="pipeline-stage-metric"><span>Packed:</span> <strong id="wip-stg5-cartons">${wip.stage5Cartons || '0 Cartons (0 Prs)'}</strong></div>
-              <div class="pipeline-stage-metric"><span>Pending:</span> <strong>${wip.stage5Pending || '0 Cartons'}</strong></div>
+          <div class="wip-node ${activeStage === 'STEP_5' ? 'is-active' : ''} ${(wip.outputCartons || 0) > 0 ? 'is-complete' : ''}" data-testid="wip-node-5">
+            <span class="wip-node-num">5</span>
+            <div class="wip-node-body">
+              <div class="wip-node-title">Master cartons</div>
+              <div class="wip-node-metric"><span>Spec</span><strong>30 prs / ctn</strong></div>
+              <div class="wip-node-metric"><span>Packed</span><strong id="wip-stg5-cartons">${wip.stage5Cartons || '0 Cartons (0 Prs)'}</strong></div>
+              <div class="wip-node-metric"><span>Pending</span><strong>${wip.stage5Pending || '0 Cartons'}</strong></div>
+              <button type="button" class="${activeStage === 'STEP_5' ? 'btn-primary' : 'btn-outline'} wip-node-action" id="btn-wip-step5"${isSuperUser ? '' : ' disabled'}>
+                ${isSuperUser ? 'Box &amp; seal cartons' : 'Super User only'}
+              </button>
             </div>
-            <button type="button" class="${activeStage === 'STEP_5' ? 'btn-primary' : 'btn-outline'}" style="width: 100%; margin-top: 10px; font-size: 12px; padding: 6px; justify-content: center;" id="btn-wip-step5"${isSuperUser ? '' : ' disabled'}>
-              ${isSuperUser ? 'Box &amp; Seal Cartons' : 'Super User Only (QC &amp; Dispatch)'}
-            </button>
           </div>
+
+          <!-- REWORK LANE: pairs looping through Alteration -> Inward -> REQ -> Stage 1 -->
+          ${(() => {
+            const inRepair = scopedDefects
+              .filter(d => {
+                const st = String((d as any).handoffStage || '');
+                if (st) return st === 'PENDING_TAILOR' || st === 'WITH_TAILOR';
+                return d.status === 'Pending Tailor' || d.status === 'In Rework' || d.status === 'In Washing' || d.status === 'In Sorting';
+              })
+              .reduce((sum, d) => sum + Number(d.pairsCount || 0), 0);
+            const atInward = scopedDefects
+              .filter(d => (d as any).handoffStage === 'RECEIVED_AT_INWARD' || d.status === 'At Inward')
+              .reduce((sum, d) => sum + Number(d.pairsCount || 0), 0);
+            const reissueRequested = scopedDefects
+              .filter(d => (d as any).handoffStage === 'REISSUE_REQUESTED' || d.status === 'Re-Issue Requested')
+              .reduce((sum, d) => sum + Number(d.pairsCount || 0), 0);
+            const returned = scopedDefects
+              .filter(d => (d as any).handoffStage === 'REISSUED_TO_PACKING' || d.status === 'Completed')
+              .reduce((sum, d) => sum + Number(d.pairsCount || 0), 0);
+            const hasAnyRework = inRepair + atInward + reissueRequested + returned > 0;
+            return `
+          <div class="wip-rework-lane ${hasAnyRework ? 'has-rework' : ''}" data-testid="wip-rework-lane">
+            <span class="wip-rework-arrow" aria-hidden="true">&larr;</span>
+            <span class="wip-rework-label">Rework</span>
+            ${!hasAnyRework
+              ? '<span class="wip-rework-count">No rework for this lot</span>'
+              : `<span class="wip-rework-count"><strong id="wip-rework-returned">${returned.toLocaleString()}</strong> returned to stage 1 &middot; <strong id="wip-rework-active">${inRepair.toLocaleString()}</strong> in repair${atInward > 0 ? ` &middot; <strong id="wip-rework-at-inward">${atInward.toLocaleString()}</strong> at Inward` : ''}${reissueRequested > 0 ? ` &middot; <strong id="wip-rework-requested">${reissueRequested.toLocaleString()}</strong> re-issue requested (awaiting Inward)` : ''}</span>`}
+            ${atInward > 0 ? `<button type="button" class="btn-primary wip-rework-cta" id="btn-wip-request-rework-reissue" data-req-number="${escapeHtml(baseReq)}">Request re-issue (REQ)</button>` : ''}
+          </div>`;
+          })()}
         </div>
         `;
         })()}
@@ -383,7 +397,7 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
                     <td>${d.defectClass}</td>
                     <td class="text-right font-bold">${d.qty}</td>
                     <td><span class="status-pill">${d.status}</span></td>
-                    <td style="font-size: 11px; color: var(--ink-600);">Return to Stage 1</td>
+                    <td style="font-size: 11px; color: var(--ink-600);">${escapeHtml(d.route || 'Tailor -> Inward -> REQ -> Stage 1')}</td>
                   </tr>
                 `).join('') + (scopedDefects.length > 5 ? `
                   <tr>

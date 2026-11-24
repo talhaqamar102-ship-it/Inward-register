@@ -14,8 +14,7 @@
       "mcp__plugin_playwright_playwright__*"
     ],
     "deny": [
-      "Bash(rm *)",
-      "Bash(git push *)"
+      "Bash(rm *)"
     ]
   },
   "hooks": {
@@ -37,17 +36,6 @@
             "type": "command",
             "command": "npx tsx scripts/graphify.ts hook-guard read",
             "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "npx tsx scripts/graphify.ts update ."
           }
         ]
       }

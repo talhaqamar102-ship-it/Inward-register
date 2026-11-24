@@ -43,6 +43,7 @@ export interface InwardRegisterStateShape {
   };
   packingWip: Record<string, any>;
   ordersWipMap: Record<string, any>;
+  defectList?: Array<Record<string, any>>;
   dropdownOptions: {
     makers: string[];
     halls?: HallWithStitchers[];
@@ -155,15 +156,30 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
 
   return `
     <div class="inw" data-testid="inward-register-screen">
-      <div class="sub-header-bar">
-        <h1 class="sub-header-title">Inward register &mdash; Dock #1 goods receiving &amp; packing hall issuance</h1>
-        <div class="sub-header-right">
-          <span class="system-date-label">Date: ${formatCurrentDateDDMMYYYY()}</span>
-        </div>
-      </div>
-
       <main id="main-content" class="inw-main" tabindex="-1">
 
+        <header class="inw-header">
+          <div>
+            <div class="inw-title-row">
+              <h1 class="inw-title">Inward register</h1>
+              <span class="inw-status-pill">
+                <span class="inw-status-dot" aria-hidden="true"></span>
+                ${state.grnForm.pendingOrderId ? escapeHtml(state.grnForm.pendingOrderId) : 'Dock #1'}
+              </span>
+            </div>
+            <div class="inw-meta-row">
+              <span class="inw-meta-chip">${escapeHtml(state.grnForm.article || 'No article')}</span>
+              <span class="inw-meta-chip">PO ${escapeHtml((selectedGrnOrder as any)?.po || '—')}</span>
+              <span class="inw-meta-chip">Colour ${escapeHtml(state.grnForm.color || '—')}</span>
+              <span>&middot;</span>
+              <span>${orderStock.totalReceived.toLocaleString()} pairs received</span>
+              <span>&middot;</span>
+              <span class="system-date-label">${formatCurrentDateDDMMYYYY()}</span>
+            </div>
+          </div>
+        </header>
+
+        <div class="inw-split">
         <!-- Card 1: Receive goods -->
         <section class="inw-card" aria-labelledby="inw-receive-title">
           <h2 id="inw-receive-title" class="inw-card-title">Receive goods</h2>
@@ -325,8 +341,10 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                         <input type="text" class="inw-control grn-split-received-from" data-split-idx="${idx}" data-maker="${escapeHtml(alloc.maker)}" placeholder="${bal <= 0 ? 'Completed' : (rowHall ? `Optional note (${escapeHtml(rowHall.name)})` : `Delivered by (${escapeHtml(alloc.maker)})`)}" aria-label="Received From for ${escapeHtml(alloc.maker)}" value="${escapeHtml(splitRow.receivedFrom)}" style="min-width: 150px;" ${bal <= 0 ? 'disabled' : ''} />
                       </td>
                       ${grnActiveCodes.map(sz => {
+                        const szPlanned = rowCaps ? (rowCaps.sizePlanned[sz] ?? 0) : 0;
                         const szMax = rowCaps ? (rowCaps.sizeRemaining[sz] ?? 0) : 0;
-                        return `<td><input type="number" class="inw-size-input grn-split-size-val" data-split-idx="${idx}" data-maker="${escapeHtml(alloc.maker)}" data-size="${escapeHtml(sz)}" aria-label="${escapeHtml(alloc.maker)} Size ${escapeHtml(formatSizeColumnLabel(sz, grnActiveFormat))} Pairs" min="0" max="${szMax}" placeholder="0" value="${splitRow.sizes?.[sz] || ''}" ${bal <= 0 ? 'disabled' : ''} /></td>`;
+                        const isSizeDisabled = bal <= 0 || szPlanned <= 0 || szMax <= 0;
+                        return `<td class="${isSizeDisabled ? 'is-size-disabled-cell' : ''}"><input type="number" class="inw-size-input grn-split-size-val${isSizeDisabled ? ' is-size-disabled' : ''}" data-split-idx="${idx}" data-maker="${escapeHtml(alloc.maker)}" data-size="${escapeHtml(sz)}" aria-label="${escapeHtml(alloc.maker)} Size ${escapeHtml(formatSizeColumnLabel(sz, grnActiveFormat))} Pairs" min="0" max="${szMax}" placeholder="0" value="${isSizeDisabled ? '' : (splitRow.sizes?.[sz] || '')}" ${isSizeDisabled ? 'disabled tabindex="-1"' : ''} /></td>`;
                       }).join('')}
                       <td class="inw-size-total-val" id="grn-split-row-total-${idx}">${rowTot.toLocaleString()}</td>
                     </tr>`;
@@ -358,7 +376,12 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                   </tr>
                   <tr>
                     <td class="inw-size-row-label">Receiving</td>
-                    ${grnActiveCodes.map(sz => `<td><input type="number" aria-label="Size ${escapeHtml(formatSizeColumnLabel(sz, grnActiveFormat))} Pairs" class="inw-size-input grn-size-val" data-size="${escapeHtml(sz)}" min="0" ${grnCaps ? `max="${grnCaps.sizeRemaining[sz] ?? 0}"` : ''} placeholder="0" value="${state.grnForm.sizes?.[sz] || ''}" /></td>`).join('')}
+                    ${grnActiveCodes.map(sz => {
+                      const szPlanned = grnCaps ? (grnCaps.sizePlanned[sz] ?? 0) : null;
+                      const szMax = grnCaps ? (grnCaps.sizeRemaining[sz] ?? 0) : null;
+                      const isSizeDisabled = Boolean(selectedGrnOrder && grnCaps) && ((szPlanned ?? 0) <= 0 || (szMax ?? 0) <= 0);
+                      return `<td class="${isSizeDisabled ? 'is-size-disabled-cell' : ''}"><input type="number" aria-label="Size ${escapeHtml(formatSizeColumnLabel(sz, grnActiveFormat))} Pairs" class="inw-size-input grn-size-val${isSizeDisabled ? ' is-size-disabled' : ''}" data-size="${escapeHtml(sz)}" min="0" ${grnCaps ? `max="${szMax}"` : ''} placeholder="0" value="${isSizeDisabled ? '' : (state.grnForm.sizes?.[sz] || '')}" ${isSizeDisabled ? 'disabled tabindex="-1"' : ''} /></td>`;
+                    }).join('')}
                     <td class="inw-size-total-val" id="grn-size-total-display">${currentSizeTotal.toLocaleString()}</td>
                   </tr>
                 </tbody>
@@ -461,7 +484,39 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
               </table>
             </div>
           </div>
+          ${(() => {
+            const inwardReworkItems = (state.defectList || []).filter((d: any) =>
+              d.altId && (
+                d.handoffStage === 'RECEIVED_AT_INWARD' ||
+                d.handoffStage === 'REISSUE_REQUESTED' ||
+                d.status === 'At Inward' ||
+                d.status === 'Re-Issue Requested'
+              )
+            );
+            if (inwardReworkItems.length === 0) return '';
+            return `
+          <div id="inw-rework-reissue-queue" class="inw-rework-queue">
+            <div class="inw-rework-queue-title">Repaired Alteration Re-Issue Queue (via Original REQ)</div>
+            ${inwardReworkItems.map((d: any) => {
+              const reqCode = normalizeBaseReqNumber(d.reqNumber || d.id);
+              const aReqCode = getAlterationReqNumber(reqCode);
+              const prs = Number(d.pairsCount) || parseInt(String(d.qty || '0'), 10) || 0;
+              const isRequested = d.handoffStage === 'REISSUE_REQUESTED' || d.status === 'Re-Issue Requested';
+              return `
+              <div class="inw-rework-row" data-inw-rework-row="${d.altId}">
+                <div class="inw-rework-row-meta">
+                  <strong>${escapeHtml(reqCode)} &middot; ${prs.toLocaleString()} repaired pairs</strong>
+                  <span>${escapeHtml(aReqCode)} &middot; Tailor: ${escapeHtml(d.tailor || 'Assigned Tailor')} &middot; ${isRequested ? 'REQ Requested by Packing Hall' : 'At Inward — Awaiting Packing Hall REQ'}</span>
+                </div>
+                ${isRequested
+                  ? `<button type="button" class="inw-btn inw-btn--primary" data-inw-reissue-alt-id="${d.altId}" data-inw-reissue-req="${escapeHtml(reqCode)}" data-inw-reissue-areq="${escapeHtml(aReqCode)}" data-inw-reissue-tailor="${escapeHtml(d.tailor || 'Assigned Tailor')}" data-inw-reissue-pairs="${prs}">Issue rework to packing hall</button>`
+                  : `<button type="button" class="btn-outline inw-btn" disabled title="Packing Hall must request rework re-issue first">Awaiting REQ</button>`}
+              </div>`;
+            }).join('')}
+          </div>`;
+          })()}
         </section>
+        </div>
 
         <!-- Card 3: Store Register Master Table -->
         <section class="inw-card inw-card--table" aria-label="Store receiving ledger">

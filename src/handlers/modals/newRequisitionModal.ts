@@ -71,7 +71,11 @@ export function openNewRequisitionModal(preselectOrderId?: string): void {
             <tr>
               <td style="text-align: left; font-size: 11.5px; color: var(--ink-950); font-weight: 700;">Asking</td>
               ${sizeCodes
-                .map(sz => `<td><input type="number" class="size-matrix-input req-size-val" data-size="${escapeHtml(sz)}" aria-label="Asking pairs for Size ${escapeHtml(formatSizeColumnLabel(sz, sizeFormat))}" min="0" max="${perSizeMax[sz] || 0}" value="${currentSizes[sz] || ''}" placeholder="0" /></td>`)
+                .map(sz => {
+                  const maxAllowed = Number(perSizeMax[sz] || 0);
+                  const isDisabled = maxAllowed <= 0;
+                  return `<td class="${isDisabled ? 'is-size-disabled-cell' : ''}"><input type="number" class="size-matrix-input req-size-val${isDisabled ? ' is-size-disabled' : ''}" data-size="${escapeHtml(sz)}" aria-label="Asking pairs for Size ${escapeHtml(formatSizeColumnLabel(sz, sizeFormat))}" min="0" max="${maxAllowed}" value="${isDisabled ? '' : (currentSizes[sz] || '')}" placeholder="0" ${isDisabled ? 'disabled tabindex="-1"' : ''} /></td>`;
+                })
                 .join('')}
               <td style="font-weight: 800; font-size: 14px; color: var(--ink-950);" id="new-req-size-total">${totalVal}</td>
             </tr>

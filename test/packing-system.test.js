@@ -213,3 +213,43 @@ describe('Gloves Packing Execution System - End-to-End Test Suite', () => {
     assert.equal(manifest.totalCBM, '0.263');
   });
 });
+
+describe('Parallel Stage 3-4 flow: rework does not block matched pairs', () => {
+  test('matched pairs proceed while rework is pending, and catch-up pairs get a follow-up M-REQ', () => {
+    const req = PackingService.createGloveRequisition('CUST-001', 'GLV-A16', 250, 'Parallel flow rework batch');
+    const reqNo = req.req_number;
+
+    PackingService.issueGloveRequisition(reqNo);
+    PackingService.executeStep1Checking(reqNo, 200, 50, 'Rework batch held for alteration');
+    PackingService.executeStep2Ironing(reqNo, 200, 0, '');
+    PackingService.executeStep3Matching(reqNo, 200, 0, '');
+
+    const firstMatReq = PackingService.createMaterialRequisition(reqNo);
+    assert.equal(firstMatReq.pairs_count, 200);
+    PackingService.issueMaterialRequisition(firstMatReq.mat_req_number);
+
+    // 200 matched pairs enter Stage 4 while 50 rework pairs are still pending
+    const packed = PackingService.executeStep4FirstPacking(reqNo, 200);
+    assert.equal(packed.wip.step4_packing_good, 200);
+
+    // Rework returns to Stage 1 and catches up through Stages 1-3
+    const alt = PackingService.getAlterations(reqNo)[0];
+    PackingService.returnAlteration(alt.id);
+    PackingService.executeStep1Checking(reqNo, 50, 0, '');
+    PackingService.executeStep2Ironing(reqNo, 50, 0, '');
+    PackingService.executeStep3Matching(reqNo, 50, 0, '');
+
+    // Catch-up pairs are covered by a second M-REQ, not silently ignored
+    const catchUpMatReq = PackingService.createMaterialRequisition(reqNo);
+    assert.notEqual(catchUpMatReq.mat_req_number, firstMatReq.mat_req_number);
+    assert.equal(catchUpMatReq.pairs_count, 50);
+    assert.equal(catchUpMatReq.polybags_requested, 50);
+    assert.equal(catchUpMatReq.stickers_requested, 100);
+    assert.equal(catchUpMatReq.status, 'PENDING');
+
+    // The issued slip stays visible so Stage 4 does not re-lock
+    const refreshed = PackingService.getRequisition(reqNo);
+    assert.equal(refreshed.materialReq.status, 'ISSUED');
+    assert.equal(refreshed.materialReq.mat_req_number, firstMatReq.mat_req_number);
+  });
+});

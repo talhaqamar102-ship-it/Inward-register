@@ -115,6 +115,19 @@
   z-index: 1;
 }
 
+.size-matrix-input:disabled,
+.size-matrix-input.is-size-disabled {
+  background: var(--ink-100);
+  border-color: var(--border-subtle);
+  color: var(--ink-400);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.is-size-disabled-cell {
+  background: var(--ink-50);
+}
+
 /* Packing Hall Responsive Grids & Status Banners */
 .packing-toolbar-grid {
   display: flex;
@@ -574,17 +587,18 @@
 .rep-assign-cta {
   height: 36px;
   padding: 0 16px;
-  border: 1px solid #1E3A8A;
+  border: 1px solid var(--ink-950);
   border-radius: 6px;
-  background: #1E40AF;
-  color: #ffffff;
+  background: var(--ink-950);
+  color: var(--white);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
 }
 
 .rep-assign-cta:hover:not(:disabled) {
-  background: #1E3A8A;
+  background: var(--ink-800);
+  border-color: var(--ink-800);
 }
 
 .rep-assign-cta:disabled,
@@ -707,8 +721,16 @@
   cursor: pointer;
 }
 
-.rep-row-return:hover {
+.rep-row-return:hover:not(:disabled) {
   background: var(--ink-100);
+}
+
+.rep-row-return:disabled {
+  background: var(--ink-100);
+  border-color: var(--border-subtle);
+  color: var(--ink-400);
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .rep-row-scrap {
@@ -831,5 +853,260 @@
 @media (max-width: 760px) {
   .rep-pareto-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Two-rail Packing Hall flow: main flow left-to-right, rework returns beneath */
+.wip-rail {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(190px, 1.15fr) repeat(2, minmax(0, 1fr));
+  column-gap: 16px;
+  row-gap: 14px;
+  align-items: start;
+}
+
+.wip-rail::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.wip-node {
+  position: relative;
+  min-width: 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-strong);
+}
+
+.wip-node.is-active,
+.wip-node.is-complete {
+  padding-top: 19px;
+  border-top: 2px solid var(--ink-950);
+}
+
+.wip-node.is-complete {
+  border-top-color: var(--ink-400);
+}
+
+.wip-node-num {
+  position: absolute;
+  top: -11px;
+  left: 0;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--white);
+  color: var(--ink-600);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wip-node.is-active .wip-node-num {
+  background: var(--ink-950);
+  border-color: var(--ink-950);
+  color: var(--white);
+}
+
+.wip-node.is-complete .wip-node-num {
+  background: var(--ink-200);
+  border-color: var(--ink-300);
+  color: var(--ink-900);
+}
+
+.wip-node-title {
+  margin-bottom: 6px;
+  color: var(--ink-950);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.wip-node-metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--ink-600);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wip-node-metric strong {
+  color: var(--ink-950);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.wip-node-action {
+  width: 100%;
+  justify-content: center;
+  margin-top: 8px;
+  padding: 6px;
+  font-size: 12px;
+}
+
+/* The one accent: the material requisition reads as a paper slip */
+.wip-mreq-slip {
+  position: relative;
+  align-self: stretch;
+  padding: 24px 12px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--ink-50);
+}
+
+.wip-mreq-slip::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  background: var(--border-strong);
+}
+
+.wip-mreq-slip.is-ready::before {
+  background: var(--ink-950);
+}
+
+.wip-slip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border-strong);
+}
+
+.wip-slip-label {
+  color: var(--ink-950);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.wip-slip-state {
+  color: var(--ink-600);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wip-mreq-slip.is-ready .wip-slip-state {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--ink-950);
+  color: var(--white);
+  font-weight: 600;
+}
+
+.wip-slip-metric {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  color: var(--ink-600);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wip-slip-metric strong {
+  color: var(--ink-950);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.wip-slip-qty strong {
+  font-size: 18px;
+  line-height: 1.1;
+  font-weight: 600;
+}
+
+.wip-slip-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.wip-slip-btn {
+  flex: 1;
+  justify-content: center;
+  font-size: 12px;
+}
+
+/* Rework lane: the return path to Stage 1 */
+.wip-rework-lane {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-subtle);
+  color: var(--ink-600);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wip-rework-lane.has-rework {
+  border-top-color: var(--border-strong);
+  color: var(--ink-900);
+}
+
+.wip-rework-arrow {
+  color: var(--ink-950);
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.wip-rework-label {
+  color: var(--ink-950);
+  font-weight: 600;
+}
+
+.wip-rework-count strong {
+  color: var(--ink-950);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.wip-rework-cta {
+  margin-left: auto;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+  .wip-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wip-mreq-slip {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 700px) {
+  .wip-rail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wip-mreq-slip {
+    grid-column: auto;
   }
 }

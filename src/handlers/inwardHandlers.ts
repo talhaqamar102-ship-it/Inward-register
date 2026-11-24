@@ -36,7 +36,8 @@ import {
   applyServerRequisition,
   isPersistedRequisition,
   saveCurrentOrderWipState,
-  switchActiveOrder
+  switchActiveOrder,
+  syncBackendData
 } from '../state/syncService';
 
 export function attachGRNHandlers(): void {
@@ -882,6 +883,63 @@ export function attachGRNHandlers(): void {
     openModal(`Issued Requisition Slip — ${baseReq}`, slipHtml, true);
     printDocument(`Issued Requisition Slip — ${baseReq}`, slipHtml);
     showToast(`Issued ${evalIssue.askingPairs} Pairs for Requisition ${baseReq} from Inward Register to Packing Hall Stage 1!`);
+  });
+
+  // Inward Clerk re-issues tailor-repaired pairs back to Packing Hall Stage 1 once Packing Hall has requested re-issue
+  let reworkReissueIssueInFlight = false;
+  document.querySelectorAll<HTMLButtonElement>('[data-inw-reissue-alt-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (reworkReissueIssueInFlight) return;
+      const altId = Number(btn.getAttribute('data-inw-reissue-alt-id') || 0);
+      const reqNo = normalizeBaseReqNumber(btn.getAttribute('data-inw-reissue-req') || state.packingWip.selectedBatch);
+      const aReqNo = btn.getAttribute('data-inw-reissue-areq') || reqNo.replace(/^REQ-/, 'A-REQ-');
+      const tailorName = btn.getAttribute('data-inw-reissue-tailor') || 'Assigned Tailor';
+      if (!altId) return;
+      reworkReissueIssueInFlight = true;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/alterations/${altId}/reissue-to-packing`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reqNumber: reqNo })
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          throw new Error(json.error || `Unable to re-issue ${reqNo} rework to Packing Hall.`);
+        }
+        const pairsCount = Number(json.data?.pairsCount || btn.getAttribute('data-inw-reissue-pairs') || 0);
+        await syncBackendData();
+        const slipHtml = `
+          <div class="printable-slip-box">
+            <div class="printable-slip-header">
+              <h2 style="margin: 0; font-size: 16px; font-weight: 800; color: var(--ink-950);">HAMMAD INDUSTRIES &bull; REWORK RE-ISSUE SLIP (${escapeHtml(reqNo)})</h2>
+              <p style="margin: 2px 0 0; font-size: 11px; text-transform: uppercase; color: var(--ink-600);">
+                Inward Register &rarr; Packing Hall Stage 1 &bull; Date: ${formatCurrentDateDDMMYYYY()}
+              </p>
+            </div>
+            <div class="printable-meta-grid">
+              <div><span>Parent Requisition #:</span> <strong>${escapeHtml(reqNo)}</strong></div>
+              <div><span>Alteration Ref #:</span> <strong>${escapeHtml(aReqNo)}</strong></div>
+              <div><span>Repaired By Tailor:</span> <strong>${escapeHtml(tailorName)}</strong></div>
+              <div><span>Re-Issued Quantity:</span> <strong>${pairsCount.toLocaleString()} Pairs</strong></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; gap: 12px; font-size: 11px; margin-top: 22px; border-top: 1px dashed var(--ink-500); padding-top: 10px;">
+              <span>Inward Clerk Sign: _____________</span>
+              <span>Packing Hall Receiver: _____________</span>
+              <span>Approved By: _____________</span>
+            </div>
+          </div>
+        `;
+        openModal(`Rework Re-Issued — ${reqNo}`, slipHtml, true);
+        printDocument(`Rework Re-Issued — ${reqNo}`, slipHtml);
+        showToast(json.data?.message || `Re-issued ${pairsCount} repaired pairs for ${reqNo} to Packing Hall Stage 1.`);
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : `Unable to re-issue rework for ${reqNo}.`);
+      } finally {
+        reworkReissueIssueInFlight = false;
+        if (btn.isConnected) btn.disabled = false;
+      }
+    });
   });
 
   // --- Section: GRN Export & Summary Print ---

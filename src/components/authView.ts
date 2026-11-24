@@ -103,9 +103,11 @@ export function renderModuleSwitcher(state: any): string {
     'screen-qc': 'QC_INSPECTOR',
     'screen-admin': 'SUPER_USER'
   };
-  const pendingAltCount = (state.defectList || []).filter(
-    (d: any) => d.rawStatus === 'SENT_FOR_ALTERATION' || d.status === 'In Rework'
-  ).length;
+  const pendingAltCount = (state.defectList || []).filter((d: any) => {
+    const stage = String(d.handoffStage || '');
+    if (stage) return stage === 'PENDING_TAILOR' || stage === 'WITH_TAILOR';
+    return d.status === 'Pending Tailor' || d.status === 'In Rework';
+  }).length;
   const displayedStationRole = (viewingOtherScreen || (isInwardClerk && state.activeScreen === 'screen-repair'))
     ? (screenRoles[state.activeScreen] || state.currentUser.role)
     : state.currentUser.role;

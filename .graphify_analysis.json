@@ -80,6 +80,7 @@
       "dom:#grn-req-asking-qty",
       "dom:#grn-available-stock",
       "dom:#grn-req-issue-status",
+      "dom:#inw-rework-reissue-queue",
       "dom:#btn-export-grn-excel",
       "dom:#btn-print-grn-summary",
       "iface:src/components/packingHallView.ts:PackingHallDefectRow",
@@ -108,6 +109,7 @@
       "dom:#btn-wip-step3",
       "dom:#wip-mreq-no",
       "dom:#wip-mreq-qty",
+      "dom:#wip-mreq-covered",
       "dom:#btn-wip-generate-mreq-slip",
       "dom:#btn-wip-print-mreq-slip",
       "dom:#wip-stg4-in",
@@ -116,10 +118,16 @@
       "dom:#btn-wip-step4",
       "dom:#wip-stg5-cartons",
       "dom:#btn-wip-step5",
+      "dom:#wip-rework-returned",
+      "dom:#wip-rework-active",
+      "dom:#wip-rework-at-inward",
+      "dom:#wip-rework-requested",
+      "dom:#btn-wip-request-rework-reissue",
       "dom:#btn-wip-export-shift",
       "dom:#btn-wip-print-labels",
       "dom:#btn-wip-final-clearance",
       "iface:src/components/repairAndQcViews.ts:RepairAndQcStateShape",
+      "fn:src/components/repairAndQcViews.ts:isBenchReworkDefect",
       "fn:src/components/repairAndQcViews.ts:resolveAlterationSelectionContext",
       "fn:src/components/repairAndQcViews.ts:renderRepairScreen",
       "fn:src/components/repairAndQcViews.ts:renderQcScreen",
@@ -465,6 +473,11 @@
       "route:POST:/api/materials/return",
       "route:POST:/api/alterations/assign",
       "route:POST:/api/alterations/:id/repair",
+      "route:POST:/api/alterations/:id/receive-inward",
+      "route:POST:/api/alterations/:id/request-reissue",
+      "route:POST:/api/requisitions/:reqNo/request-rework-reissue",
+      "route:POST:/api/alterations/:id/reissue-to-packing",
+      "route:POST:/api/requisitions/:reqNo/reissue-rework",
       "route:POST:/api/qc/:reqNo/aql-audit",
       "route:GET:/api/qc/aql-calc",
       "route:GET:/api/export/manifest/:reqNo",
@@ -519,6 +532,8 @@
       "fn:src/services/packingService.js:getScaleCodesForFormat",
       "fn:src/services/packingService.js:parseRequisitionSizes",
       "fn:src/services/packingService.js:runAtomicWipStep",
+      "fn:src/services/packingService.js:getMaterialReqCoverage",
+      "fn:src/services/packingService.js:getIssuedOrLatestMaterialReq",
       "class:src/services/packingService.js:PackingService",
       "method:src/services/packingService.js:PackingService.getGloveInventory",
       "method:src/services/packingService.js:PackingService.getMaterialInventory",
@@ -551,6 +566,9 @@
       "method:src/services/packingService.js:PackingService.getPackagingBOM",
       "method:src/services/packingService.js:PackingService.createMaterialReturnVoucher",
       "method:src/services/packingService.js:PackingService.assignAlterationTailor",
+      "method:src/services/packingService.js:PackingService.receiveAlterationAtInward",
+      "method:src/services/packingService.js:PackingService.requestAlterationReissue",
+      "method:src/services/packingService.js:PackingService.reissueAlterationToPacking",
       "method:src/services/packingService.js:PackingService.completeAlterationRepair",
       "method:src/services/packingService.js:PackingService.executeAQLAudit",
       "method:src/services/packingService.js:PackingService.getMasterCartonManifest",
@@ -1258,8 +1276,8 @@
     "0": 0.68,
     "1": 0.61,
     "2": 0.6,
-    "3": 0.63,
-    "4": 0.6,
+    "3": 0.64,
+    "4": 0.59,
     "5": 0.5,
     "6": 0.71,
     "7": 0.67
@@ -1274,7 +1292,7 @@
       "source_location": "L1",
       "community": 2,
       "community_label": "Express API & HTTP Server Layer (server.ts, api.js)",
-      "degree": 80
+      "degree": 85
     },
     {
       "id": "file:src/main.ts",
@@ -1293,10 +1311,10 @@
       "kind": "class",
       "file_type": "code",
       "source_file": "src/services/packingService.js",
-      "source_location": "L65-L2779",
+      "source_location": "L86-L3092",
       "community": 3,
       "community_label": "Packing Hall 5-Stage & AQL Domain Services (src/services)",
-      "degree": 60
+      "degree": 63
     },
     {
       "id": "file:src/handlers/qcDispatchHandlers.ts",
@@ -1332,6 +1350,17 @@
       "degree": 55
     },
     {
+      "id": "file:src/components/packingHallView.ts",
+      "label": "src/components/packingHallView.ts",
+      "kind": "file",
+      "file_type": "code",
+      "source_file": "src/components/packingHallView.ts",
+      "source_location": "L1",
+      "community": 0,
+      "community_label": "Frontend MES Screens & UI State (src/main.ts)",
+      "degree": 52
+    },
+    {
       "id": "file:src/components/superUser/orderCreationTab.ts",
       "label": "src/components/superUser/orderCreationTab.ts",
       "kind": "file",
@@ -1351,7 +1380,7 @@
       "source_location": "L1",
       "community": 7,
       "community_label": "AI Agent Harness, Skills & Governance (.claude/, CLAUDE.md)",
-      "degree": 49
+      "degree": 50
     },
     {
       "id": "file:src/utils/domModalsAndPrint.ts",
@@ -1374,17 +1403,6 @@
       "community": 4,
       "community_label": "SQLite WAL Database & 17-Table Schema (src/db.js)",
       "degree": 47
-    },
-    {
-      "id": "file:src/components/packingHallView.ts",
-      "label": "src/components/packingHallView.ts",
-      "kind": "file",
-      "file_type": "code",
-      "source_file": "src/components/packingHallView.ts",
-      "source_location": "L1",
-      "community": 0,
-      "community_label": "Frontend MES Screens & UI State (src/main.ts)",
-      "degree": 46
     },
     {
       "id": "file:src/utils/requisitionLogic.test.ts",

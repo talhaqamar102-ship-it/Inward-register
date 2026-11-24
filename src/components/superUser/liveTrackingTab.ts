@@ -456,27 +456,32 @@ export function renderLiveTrackingTab(ctx: SuperUserRenderContext): string {
           : ord.grnBatches
               .map((g: SuperUserGrnBatchItem) => {
                 const voidCheck = canVoidGrnBatch(g);
-                const sizeTxt = isLegacy
-                  ? sizeCodes.map(sz => n(g.sizes?.[sz])).join(' / ')
-                  : sizeCodes.filter(sz => Number(g.sizes?.[sz] || 0) > 0).map(sz => `${escapeHtml(sz)}:${n(g.sizes?.[sz])}`).join(' / ') || '0';
+                const nonZeroSizes = sizeCodes.filter(sz => Number(g.sizes?.[sz] || 0) > 0);
+                const sizeCell = isLegacy
+                  ? `<span class="mono su-lt-nowrap">${sizeCodes.map(sz => n(g.sizes?.[sz])).join(' / ')}</span>`
+                  : nonZeroSizes.length > 0
+                    ? `<div class="su-lt-size-list">${nonZeroSizes.map(sz => `<span class="su-lt-size-chip">${escapeHtml(sz)}:${n(g.sizes?.[sz])}</span>`).join('')}</div>`
+                    : `<span class="mono muted">0</span>`;
                 const sourceTxt = g.hallName && g.stitcherName
                   ? `${escapeHtml(g.hallName)} &rarr; ${escapeHtml(g.stitcherName)}`
                   : (g.receivedFrom && g.receivedFrom !== g.maker ? escapeHtml(g.receivedFrom) : '');
                 return `
           <tr id="tracking-chip-row-${escapeHtml(g.grnCode)}" class="${ctx.highlightedRefCode === g.grnCode ? 'is-highlighted' : ''}">
-            <td>${refTag('grn', g.grnCode)}<div class="su-lt-sub">Batch ${g.orderBatchSeq}${sourceTxt ? ` &middot; ${sourceTxt}` : ''}</div></td>
-            <td class="muted">${escapeHtml(g.date)}</td>
-            <td class="mono">${sizeTxt}</td>
-            <td class="text-right num"><strong>${n(g.rcvdPairs)}</strong></td>
-            <td>
-              <span class="${getSuperUserStatusBadgeClass(g.allocationStatus)}">${escapeHtml(g.allocationStatus)}</span>
-              ${
-                g.allocatedToReqs.length > 0
-                  ? `<div class="su-lt-sub">${g.allocatedToReqs.map(a => `${escapeHtml(a.reqNumber)} (${n(a.pairs)})`).join(', ')}</div>`
-                  : `<div class="su-lt-sub">${n(g.unallocatedPairs)} in dock pool</div>`
-              }
+            <td class="su-lt-col-ref">${refTag('grn', g.grnCode)}<div class="su-lt-sub">Batch ${g.orderBatchSeq}${sourceTxt ? ` &middot; ${sourceTxt}` : ''}</div></td>
+            <td class="muted su-lt-col-date">${escapeHtml(g.date)}</td>
+            <td class="su-lt-col-sizes">${sizeCell}</td>
+            <td class="text-right num su-lt-col-pairs"><strong>${n(g.rcvdPairs)}</strong></td>
+            <td class="su-lt-col-status">
+              <div class="su-lt-status-stack">
+                <span class="${getSuperUserStatusBadgeClass(g.allocationStatus)}">${escapeHtml(g.allocationStatus)}</span>
+                ${
+                  g.allocatedToReqs.length > 0
+                    ? `<div class="su-lt-alloc-list">${g.allocatedToReqs.map(a => `<span class="su-lt-alloc-item">${escapeHtml(a.reqNumber)} (${n(a.pairs)})</span>`).join('')}</div>`
+                    : `<div class="su-lt-sub">${n(g.unallocatedPairs)} in dock pool</div>`
+                }
+              </div>
             </td>
-            <td class="text-center" style="white-space:nowrap">
+            <td class="text-right su-lt-col-actions">
               <button type="button" class="table-btn su-lt-link" data-su-action="open-slip" data-slip-type="GRN" data-ref-code="${escapeHtml(g.grnCode)}" data-order-id="${escapeHtml(ord.orderId)}">Slip</button>
               ${voidCheck.allowed ? `<button type="button" class="table-btn su-lt-link su-lt-link--danger" title="${escapeHtml(voidCheck.reason)}" data-su-action="void-grn" data-grn-sr="${g.sr}" data-grn-code="${escapeHtml(g.grnCode)}">Void</button>` : ''}
             </td>
@@ -498,30 +503,34 @@ export function renderLiveTrackingTab(ctx: SuperUserRenderContext): string {
                   refTag(kind, code, `data-su-action="open-slip" data-slip-type="${type}" data-ref-code="${escapeHtml(code)}" data-order-id="${escapeHtml(ord.orderId)}"`);
                 return `
           <tr id="tracking-chip-row-${escapeHtml(r.reqNumber)}" class="${ctx.highlightedRefCode === r.reqNumber ? 'is-highlighted' : ''}">
-            <td>
+            <td class="su-lt-col-ref">
               ${slip('req', 'REQ', r.reqNumber)}
-              <div class="su-lt-sub">#${r.orderReqSeq}${r.allocatedFromGrns.length > 0 ? ` from ${r.allocatedFromGrns.map(a => `${escapeHtml(a.grnCode)} (${n(a.pairs)})`).join(' + ')}` : ''}</div>
+              <div class="su-lt-sub">#${r.orderReqSeq}${r.allocatedFromGrns.length > 0 ? ` from ${r.allocatedFromGrns.map(a => `<span class="su-lt-nowrap">${escapeHtml(a.grnCode)} (${n(a.pairs)})</span>`).join(' + ')}` : ''}</div>
             </td>
-            <td>
-              <div>${slip('mreq', 'M-REQ', r.mreqNo)} <span class="muted">${escapeHtml(r.mreqStatus)}</span></div>
-              <div style="margin-top:4px">${slip('areq', 'A-REQ', r.altReqNo)} <span class="muted">${n(r.inAlterationPairs)} rework${r.alterationCycleCount > 0 ? `, cycle ${r.alterationCycleCount} of 2` : ''}</span></div>
+            <td class="su-lt-col-linked">
+              <div class="su-lt-linked-stack">
+                <div class="su-lt-linked-row">${slip('mreq', 'M-REQ', r.mreqNo)}<span class="muted su-lt-linked-meta">${escapeHtml(r.mreqStatus)}</span></div>
+                <div class="su-lt-linked-row">${slip('areq', 'A-REQ', r.altReqNo)}<span class="muted su-lt-linked-meta">${n(r.inAlterationPairs)} rework${r.alterationCycleCount > 0 ? `, cycle ${r.alterationCycleCount} of 2` : ''}</span></div>
+              </div>
             </td>
-            <td class="text-right num"><strong>${r.issuedPairs > 0 ? n(r.issuedPairs) : `<span class="muted">Asked ${n(r.askingPairs)}</span>`}</strong></td>
-            <td>
+            <td class="text-right num su-lt-col-pairs"><strong>${r.issuedPairs > 0 ? n(r.issuedPairs) : `<span class="muted">Asked ${n(r.askingPairs)}</span>`}</strong></td>
+            <td class="su-lt-col-progress">
               ${renderStageMiniTrack(r.activeStage, r.awaitingFinalQc, r.reqLifecycleStatus === 'CLOSED ✓')}
               ${r.awaitingFinalQc ? `<div class="su-lt-sub">Stage 4 done, awaiting final QC</div>` : ''}
-              <div class="su-lt-figs" style="justify-content:flex-start;margin-top:8px">
+              <div class="su-lt-figs">
                 <span>WIP<b>${n(r.inFloorWipPairs)}</b></span>
                 <span class="${r.inAlterationPairs > 0 ? 'neg' : ''}">Alt<b>${n(r.inAlterationPairs)}</b></span>
                 <span class="${r.scrappedPairs > 0 ? 'neg' : ''}">Scrap<b>${n(r.scrappedPairs)}</b></span>
                 <span class="s5">Packed<b>${n(r.packedStage5Pairs)}</b></span>
               </div>
             </td>
-            <td class="text-center">
-              <div style="margin-bottom:4px">${renderReconciliationBadge(r.reconciliation)}</div>
-              <span class="${getSuperUserStatusBadgeClass(r.reqLifecycleStatus)}">${escapeHtml(r.reqLifecycleStatus)}</span>
+            <td class="su-lt-col-status">
+              <div class="su-lt-status-stack">
+                ${renderReconciliationBadge(r.reconciliation)}
+                <span class="${getSuperUserStatusBadgeClass(r.reqLifecycleStatus)}">${escapeHtml(r.reqLifecycleStatus)}</span>
+              </div>
             </td>
-            <td class="text-center" style="white-space:nowrap">
+            <td class="text-right su-lt-col-actions">
               <button type="button" class="table-btn su-lt-link" data-su-action="open-req-screen" data-req-number="${escapeHtml(r.reqNumber)}" data-target-screen="screen-packing">Floor</button>
               ${r.awaitingFinalQc || r.packedStage5Pairs > 0 ? `<button type="button" class="table-btn su-lt-link" data-su-action="open-qc-dispatch" data-req-number="${escapeHtml(r.reqNumber)}">QC</button>` : ''}
               ${voidCheck.allowed ? `<button type="button" class="table-btn su-lt-link su-lt-link--danger" title="${escapeHtml(voidCheck.reason)}" data-su-action="void-req" data-req-number="${escapeHtml(r.reqNumber)}">Void</button>` : ''}
@@ -540,10 +549,10 @@ export function renderLiveTrackingTab(ctx: SuperUserRenderContext): string {
               <span>${n(ord.receivedGrnQty)} of ${n(ord.plannedQty)} pairs received</span>
             </div>
             <div class="table-responsive">
-              <table class="data-table">
+              <table class="data-table su-lt-stream-table">
                 <thead><tr>
-                  <th scope="col">GRN</th><th scope="col">Date</th><th scope="col">${escapeHtml(sizeHeader)}</th>
-                  <th scope="col" class="text-right">Pairs</th><th scope="col">Allocation</th><th scope="col" class="text-center"><span class="sr-only">Actions</span></th>
+                  <th scope="col" class="su-lt-col-ref">GRN</th><th scope="col" class="su-lt-col-date">Date</th><th scope="col" class="su-lt-col-sizes">${escapeHtml(sizeHeader)}</th>
+                  <th scope="col" class="text-right su-lt-col-pairs">Pairs</th><th scope="col" class="su-lt-col-status">Allocation</th><th scope="col" class="text-right su-lt-col-actions">Actions</th>
                 </tr></thead>
                 <tbody>${grnRows}</tbody>
               </table>
@@ -556,10 +565,10 @@ export function renderLiveTrackingTab(ctx: SuperUserRenderContext): string {
               <span>${n(ord.issuedReqQty)} issued, ${n(ord.packedStage5Qty)} packed</span>
             </div>
             <div class="table-responsive">
-              <table class="data-table">
+              <table class="data-table su-lt-stream-table">
                 <thead><tr>
-                  <th scope="col">REQ</th><th scope="col">M-REQ and A-REQ</th><th scope="col" class="text-right">Pairs</th>
-                  <th scope="col">Progress</th><th scope="col" class="text-center">Status</th><th scope="col" class="text-center"><span class="sr-only">Actions</span></th>
+                  <th scope="col" class="su-lt-col-ref">REQ</th><th scope="col" class="su-lt-col-linked">M-REQ and A-REQ</th><th scope="col" class="text-right su-lt-col-pairs">Pairs</th>
+                  <th scope="col" class="su-lt-col-progress">Progress</th><th scope="col" class="su-lt-col-status">Status</th><th scope="col" class="text-right su-lt-col-actions">Actions</th>
                 </tr></thead>
                 <tbody>${reqRows}</tbody>
               </table>

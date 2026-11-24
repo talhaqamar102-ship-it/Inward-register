@@ -8,42 +8,42 @@ Never read a whole file over ~500 lines.
 | File | Lines |
 |---|---:|
 | `src\appContext.ts` | 14 |
-| `src\components\authView.ts` | 167 |
-| `src\components\inwardRegisterView.ts` | 567 |
-| `src\components\packingHallView.ts` | 478 |
-| `src\components\repairAndQcViews.ts` | 619 |
+| `src\components\authView.ts` | 169 |
+| `src\components\inwardRegisterView.ts` | 622 |
+| `src\components\packingHallView.ts` | 492 |
+| `src\components\repairAndQcViews.ts` | 649 |
 | `src\components\superUser\dashboardTab.ts` | 416 |
 | `src\components\superUser\editOrderModal.ts` | 311 |
-| `src\components\superUser\liveTrackingTab.ts` | 580 |
-| `src\components\superUser\orderCreationTab.ts` | 1015 |
+| `src\components\superUser\liveTrackingTab.ts` | 589 |
+| `src\components\superUser\orderCreationTab.ts` | 1008 |
 | `src\components\superUser\qcDispatchTab.ts` | 337 |
 | `src\components\superUser\reportsTab.ts` | 530 |
 | `src\components\superUser\shared.ts` | 418 |
 | `src\components\superUser\usersTab.ts` | 119 |
-| `src\components\superUserView.ts` | 168 |
+| `src\components\superUserView.ts` | 172 |
 | `src\handlers\admin\masterRegistryHandlers.ts` | 172 |
 | `src\handlers\admin\orderCreationHandlers.ts` | 870 |
 | `src\handlers\admin\reportsAndDbHandlers.ts` | 112 |
 | `src\handlers\admin\trackingAndUsersHandlers.ts` | 102 |
 | `src\handlers\adminHandlers.ts` | 318 |
-| `src\handlers\inwardHandlers.ts` | 948 |
+| `src\handlers\inwardHandlers.ts` | 1006 |
 | `src\handlers\modals\documentCenterModal.ts` | 189 |
-| `src\handlers\modals\newRequisitionModal.ts` | 323 |
-| `src\handlers\packingHandlers.ts` | 597 |
+| `src\handlers\modals\newRequisitionModal.ts` | 327 |
+| `src\handlers\packingHandlers.ts` | 637 |
 | `src\handlers\qcDispatchHandlers.ts` | 877 |
-| `src\handlers\repairHandlers.ts` | 546 |
+| `src\handlers\repairHandlers.ts` | 565 |
 | `src\handlers\windowActions.ts` | 831 |
 | `src\main.ts` | 425 |
-| `src\state\appState.ts` | 480 |
-| `src\state\syncService.ts` | 528 |
+| `src\state\appState.ts` | 486 |
+| `src\state\syncService.ts` | 566 |
 | `src\utils\domModalsAndPrint.ts` | 472 |
 | `src\utils\requisition\analyticsAndFormValidators.ts` | 749 |
 | `src\utils\requisition\demoScenarios.ts` | 429 |
 | `src\utils\requisition\policyAndRbac.ts` | 455 |
 | `src\utils\requisition\sizingAndCatalog.ts` | 446 |
 | `src\utils\requisition\slipBuilders.ts` | 400 |
-| `src\utils\requisition\traceabilityEngine.ts` | 1003 |
-| `src\utils\requisition\wipStageGates.ts` | 816 |
+| `src\utils\requisition\traceabilityEngine.ts` | 1011 |
+| `src\utils\requisition\wipStageGates.ts` | 812 |
 | `src\utils\stageInputs.ts` | 44 |
 
 ## src\appContext.ts (14 lines)
@@ -53,7 +53,7 @@ Never read a whole file over ~500 lines.
 | 7–9 | 3 | fn | `setRenderer` |
 | 11–13 | 3 | fn | `renderApp` |
 
-## src\components\authView.ts (167 lines)
+## src\components\authView.ts (169 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
@@ -61,30 +61,31 @@ Never read a whole file over ~500 lines.
 | 16–25 | 10 | fn | `stationName` |
 | 27–38 | 12 | fn | `renderShutterBrandText` |
 | 40–90 | 51 | fn | `renderAuthScreen` |
-| 93–146 | 54 | fn | `renderModuleSwitcher` |
-| 148–166 | 19 | fn | `renderModalContainer` |
+| 93–148 | 56 | fn | `renderModuleSwitcher` |
+| 150–168 | 19 | fn | `renderModalContainer` |
 
-## src\components\inwardRegisterView.ts (567 lines)
-
-| Lines | Size | Kind | Name |
-|---|---:|---|---|
-| 63–68 | 6 | fn | `formatScaleDisplayName` |
-| 70–85 | 16 | fn | `formatCompactSizeBreakdown` |
-| 87–566 | 480 | fn | `renderInwardRegisterScreen` |
-
-## src\components\packingHallView.ts (478 lines)
+## src\components\inwardRegisterView.ts (622 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 65–477 | 413 | fn | `renderPackingHallScreen` |
+| 64–69 | 6 | fn | `formatScaleDisplayName` |
+| 71–86 | 16 | fn | `formatCompactSizeBreakdown` |
+| 88–621 | 534 | fn | `renderInwardRegisterScreen` |
 
-## src\components\repairAndQcViews.ts (619 lines)
+## src\components\packingHallView.ts (492 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 25–154 | 130 | fn | `resolveAlterationSelectionContext` |
-| 156–462 | 307 | fn | `renderRepairScreen` |
-| 464–618 | 155 | fn | `renderQcScreen` |
+| 68–491 | 424 | fn | `renderPackingHallScreen` |
+
+## src\components\repairAndQcViews.ts (649 lines)
+
+| Lines | Size | Kind | Name |
+|---|---:|---|---|
+| 25–29 | 5 | fn | `isBenchReworkDefect` |
+| 31–158 | 128 | fn | `resolveAlterationSelectionContext` |
+| 160–492 | 333 | fn | `renderRepairScreen` |
+| 494–648 | 155 | fn | `renderQcScreen` |
 
 ## src\components\superUser\dashboardTab.ts (416 lines)
 
@@ -103,7 +104,7 @@ Never read a whole file over ~500 lines.
 |---|---:|---|---|
 | 32–310 | 279 | fn | `openEditPendingOrderModal` |
 
-## src\components\superUser\liveTrackingTab.ts (580 lines)
+## src\components\superUser\liveTrackingTab.ts (589 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
@@ -113,13 +114,13 @@ Never read a whole file over ~500 lines.
 | 44–57 | 14 | fn | `matchesStatus` |
 | 59–63 | 5 | fn | `stat` |
 | 64–145 | 82 | fn | `renderLiveTrackingMiniChart` |
-| 147–579 | 433 | fn | `renderLiveTrackingTab` |
+| 147–588 | 442 | fn | `renderLiveTrackingTab` |
 
-## src\components\superUser\orderCreationTab.ts (1015 lines)
+## src\components\superUser\orderCreationTab.ts (1008 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 17–1014 | 998 | fn | `renderOrderCreationTab` |
+| 17–1007 | 991 | fn | `renderOrderCreationTab` |
 
 ## src\components\superUser\qcDispatchTab.ts (337 lines)
 
@@ -157,11 +158,11 @@ Never read a whole file over ~500 lines.
 |---|---:|---|---|
 | 4–118 | 115 | fn | `renderUsersTab` |
 
-## src\components\superUserView.ts (168 lines)
+## src\components\superUserView.ts (172 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 39–167 | 129 | fn | `renderSuperUserScreen` |
+| 40–171 | 132 | fn | `renderSuperUserScreen` |
 
 ## src\handlers\admin\masterRegistryHandlers.ts (172 lines)
 
@@ -207,18 +208,18 @@ Never read a whole file over ~500 lines.
 |---|---:|---|---|
 | 23–317 | 295 | fn | `attachAdminHandlers` |
 
-## src\handlers\inwardHandlers.ts (948 lines)
+## src\handlers\inwardHandlers.ts (1006 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 42–947 | 906 | fn | `attachGRNHandlers` |
-|   ↳ 54 | | section | Section: Size Matrix & Split Sync |
-|   ↳ 55 | | inner fn | `syncSizesAndReceived` |
-|   ↳ 344 | | section | Section: Form Inputs & Split Controls |
-|   ↳ 392 | | section | Section: GRN Persistence & Receive Button |
-|   ↳ 393 | | inner fn | `persistAndRecordGrnBatch` |
-|   ↳ 777 | | section | Section: Requisition Issuance Queue |
-|   ↳ 887 | | section | Section: GRN Export & Summary Print |
+| 43–1005 | 963 | fn | `attachGRNHandlers` |
+|   ↳ 55 | | section | Section: Size Matrix & Split Sync |
+|   ↳ 56 | | inner fn | `syncSizesAndReceived` |
+|   ↳ 345 | | section | Section: Form Inputs & Split Controls |
+|   ↳ 393 | | section | Section: GRN Persistence & Receive Button |
+|   ↳ 394 | | inner fn | `persistAndRecordGrnBatch` |
+|   ↳ 778 | | section | Section: Requisition Issuance Queue |
+|   ↳ 945 | | section | Section: GRN Export & Summary Print |
 
 ## src\handlers\modals\documentCenterModal.ts (189 lines)
 
@@ -226,29 +227,29 @@ Never read a whole file over ~500 lines.
 |---|---:|---|---|
 | 15–188 | 174 | fn | `openDocumentCenterModal` |
 
-## src\handlers\modals\newRequisitionModal.ts (323 lines)
+## src\handlers\modals\newRequisitionModal.ts (327 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 15–322 | 308 | fn | `openNewRequisitionModal` |
+| 15–326 | 312 | fn | `openNewRequisitionModal` |
 |   ↳ 16 | | inner fn | `getOrderReqEntryCaps` |
 |   ↳ 42 | | inner fn | `renderReqSizeMatrixHtml` |
-|   ↳ 159 | | inner fn | `renderCapSummaryAndValidation` |
-|   ↳ 184 | | inner fn | `recalcReqModalSizes` |
-|   ↳ 206 | | inner fn | `readRequestSizes` |
-|   ↳ 218 | | inner fn | `bindReqSizeMatrixInputs` |
+|   ↳ 163 | | inner fn | `renderCapSummaryAndValidation` |
+|   ↳ 188 | | inner fn | `recalcReqModalSizes` |
+|   ↳ 210 | | inner fn | `readRequestSizes` |
+|   ↳ 222 | | inner fn | `bindReqSizeMatrixInputs` |
 
-## src\handlers\packingHandlers.ts (597 lines)
+## src\handlers\packingHandlers.ts (637 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
 | 38–57 | 20 | fn | `recordStageDefects` |
 | 59–74 | 16 | fn | `buildCurrentMaterialRequisitionSlip` |
-| 77–596 | 520 | fn | `attachPackingHandlers` |
+| 77–636 | 560 | fn | `attachPackingHandlers` |
 |   ↳ 78 | | section | Section: Batch Switcher & Sync Banner |
 |   ↳ 126 | | section | Section: Stage 1-3 Modals |
 |   ↳ 377 | | section | Section: Material Requisition & Stage 4-5 |
-|   ↳ 540 | | section | Section: New Req, Shift Export & Labels |
+|   ↳ 580 | | section | Section: New Req, Shift Export & Labels |
 
 ## src\handlers\qcDispatchHandlers.ts (877 lines)
 
@@ -264,15 +265,15 @@ Never read a whole file over ~500 lines.
 | 680–834 | 155 | fn | `handleQcDispatchAction` |
 | 836–876 | 41 | fn | `attachQcDispatchTabHandlers` |
 
-## src\handlers\repairHandlers.ts (546 lines)
+## src\handlers\repairHandlers.ts (565 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 19–545 | 527 | fn | `attachRepairHandlers` |
+| 19–564 | 546 | fn | `attachRepairHandlers` |
 |   ↳ 37 | | section | Section: Form Controls & Tailor Assignment |
-|   ↳ 230 | | section | Section: Complete Repair & Scrap Actions |
-|   ↳ 234 | | section | Section: Split Return / Scrap Modal & Row Actions |
-|   ↳ 441 | | section | Section: Defect Tag Print & Pareto Export |
+|   ↳ 237 | | section | Section: Complete Repair & Scrap Actions |
+|   ↳ 241 | | section | Section: Split Return / Scrap Modal & Row Actions |
+|   ↳ 460 | | section | Section: Defect Tag Print & Pareto Export |
 
 ## src\handlers\windowActions.ts (831 lines)
 
@@ -330,23 +331,23 @@ Never read a whole file over ~500 lines.
 | 265–285 | 21 | fn | `lockCurrentSession` |
 | 288–419 | 132 | fn | `attachEventHandlers` |
 
-## src\state\appState.ts (480 lines)
+## src\state\appState.ts (486 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 35–72 | 38 | fn | `createEmptyPackingWipState` |
-| 74–91 | 18 | fn | `loadSavedTailors` |
-| 244–250 | 7 | fn | `getOrderSizeCodes` |
-| 252–296 | 45 | fn | `getGrnRemainingCaps` |
-| 298–305 | 8 | fn | `formatGrnRemainingCaps` |
-| 307–313 | 7 | fn | `findHallByName` |
-| 315–324 | 10 | fn | `getTotalIssuedPairs` |
-| 326–345 | 20 | fn | `logAuditEvent` |
-| 347–437 | 91 | fn | `getOrderStockState` |
-| 439–448 | 10 | fn | `saveTailorName` |
-| 451–479 | 29 | fn | `getCurrentRollupSummary` |
+| 35–74 | 40 | fn | `createEmptyPackingWipState` |
+| 76–93 | 18 | fn | `loadSavedTailors` |
+| 246–252 | 7 | fn | `getOrderSizeCodes` |
+| 254–302 | 49 | fn | `getGrnRemainingCaps` |
+| 304–311 | 8 | fn | `formatGrnRemainingCaps` |
+| 313–319 | 7 | fn | `findHallByName` |
+| 321–330 | 10 | fn | `getTotalIssuedPairs` |
+| 332–351 | 20 | fn | `logAuditEvent` |
+| 353–443 | 91 | fn | `getOrderStockState` |
+| 445–454 | 10 | fn | `saveTailorName` |
+| 457–485 | 29 | fn | `getCurrentRollupSummary` |
 
-## src\state\syncService.ts (528 lines)
+## src\state\syncService.ts (566 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
@@ -356,12 +357,12 @@ Never read a whole file over ~500 lines.
 | 70–89 | 20 | fn | `applyServerRequisition` |
 | 91–115 | 25 | fn | `postWipStageUpdate` |
 | 118–122 | 5 | fn | `saveCurrentOrderWipState` |
-| 124–209 | 86 | fn | `mapServerRequisitionToWip` |
-| 212–230 | 19 | fn | `switchActiveOrder` |
-| 232–242 | 11 | fn | `applyDropdownsPayload` |
-| 244–281 | 38 | fn | `applyReceivingsPayload` |
-| 283–305 | 23 | fn | `applyAlterationsPayload` |
-| 308–527 | 220 | fn | `syncBackendData` |
+| 124–213 | 90 | fn | `mapServerRequisitionToWip` |
+| 216–234 | 19 | fn | `switchActiveOrder` |
+| 236–246 | 11 | fn | `applyDropdownsPayload` |
+| 248–285 | 38 | fn | `applyReceivingsPayload` |
+| 287–343 | 57 | fn | `applyAlterationsPayload` |
+| 346–565 | 220 | fn | `syncBackendData` |
 
 ## src\utils\domModalsAndPrint.ts (472 lines)
 
@@ -458,38 +459,38 @@ Never read a whole file over ~500 lines.
 | 292–357 | 66 | fn | `buildGrnReceivingSlipHtml` |
 | 359–399 | 41 | fn | `buildGrnReceiveConfirmationHtml` |
 
-## src\utils\requisition\traceabilityEngine.ts (1003 lines)
+## src\utils\requisition\traceabilityEngine.ts (1011 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
 | 39–174 | 136 | fn | `migrateLegacyRecordsToRelationalHierarchy` |
-| 176–707 | 532 | fn | `buildSuperUserOrderRollups` |
-| 714–728 | 15 | fn | `computeOrderReconciliationMetrics` |
-| 734–838 | 105 | fn | `executeAtomicWipTransition` |
-| 860–863 | 4 | fn | `canTransitionOrderStatus` |
-| 865–868 | 4 | fn | `canTransitionReqStatus` |
-| 876–929 | 54 | fn | `processAlterationCycle` |
-| 954–965 | 12 | fn | `parseParentOrderGroupKey` |
-| 967–1002 | 36 | fn | `groupOrderRollupsForTree` |
+| 176–715 | 540 | fn | `buildSuperUserOrderRollups` |
+| 722–736 | 15 | fn | `computeOrderReconciliationMetrics` |
+| 742–846 | 105 | fn | `executeAtomicWipTransition` |
+| 868–871 | 4 | fn | `canTransitionOrderStatus` |
+| 873–876 | 4 | fn | `canTransitionReqStatus` |
+| 884–937 | 54 | fn | `processAlterationCycle` |
+| 962–973 | 12 | fn | `parseParentOrderGroupKey` |
+| 975–1010 | 36 | fn | `groupOrderRollupsForTree` |
 
-## src\utils\requisition\wipStageGates.ts (816 lines)
+## src\utils\requisition\wipStageGates.ts (812 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 57–66 | 10 | fn | `getStartupRequisitionNumber` |
-| 68–71 | 4 | fn | `formatBatchSequence` |
-| 73–79 | 7 | fn | `isReqAwaitingFinalQc` |
-| 85–113 | 29 | fn | `canExecuteStage5CartonPacking` |
-| 115–137 | 23 | fn | `determineOrderActiveStage` |
-| 139–145 | 7 | fn | `isPackingAwaitingFinalQc` |
-| 147–151 | 5 | fn | `isStage5ReadyForCartons` |
-| 157–167 | 11 | fn | `isStage3ClearedForMaterialReq` |
-| 173–177 | 5 | fn | `isMaterialRequisitionIssuedForStage4` |
-| 183–201 | 19 | fn | `computeWipRolledYieldPct` |
-| 417–510 | 94 | fn | `computeActualStageWipPairs` |
-| 516–573 | 58 | fn | `evaluateReqReconciliation` |
-| 582–672 | 91 | fn | `evaluateOrderReconciliation` |
-| 678–815 | 138 | fn | `allocateGrnsToRequisitions` |
+| 59–68 | 10 | fn | `getStartupRequisitionNumber` |
+| 70–73 | 4 | fn | `formatBatchSequence` |
+| 75–81 | 7 | fn | `isReqAwaitingFinalQc` |
+| 87–115 | 29 | fn | `canExecuteStage5CartonPacking` |
+| 117–139 | 23 | fn | `determineOrderActiveStage` |
+| 141–147 | 7 | fn | `isPackingAwaitingFinalQc` |
+| 149–153 | 5 | fn | `isStage5ReadyForCartons` |
+| 161–163 | 3 | fn | `isStage3ClearedForMaterialReq` |
+| 169–173 | 5 | fn | `isMaterialRequisitionIssuedForStage4` |
+| 179–197 | 19 | fn | `computeWipRolledYieldPct` |
+| 413–506 | 94 | fn | `computeActualStageWipPairs` |
+| 512–569 | 58 | fn | `evaluateReqReconciliation` |
+| 578–668 | 91 | fn | `evaluateOrderReconciliation` |
+| 674–811 | 138 | fn | `allocateGrnsToRequisitions` |
 
 ## src\utils\stageInputs.ts (44 lines)
 

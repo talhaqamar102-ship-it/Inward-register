@@ -26,8 +26,11 @@ export interface DefectRecord {
   altId?: number;
   id: string;
   reqNumber?: string;
+  orderId?: string;
   pairsCount?: number;
   rawStatus?: string;
+  handoffStage?: string;
+  tailorAssigned?: boolean;
   date: string;
   origin: string;
   article: string;
@@ -35,7 +38,7 @@ export interface DefectRecord {
   defectClass: string;
   qty: string;
   tailor: string;
-  status: 'In Rework' | 'In Washing' | 'Completed' | 'In Sorting' | 'Scrapped';
+  status: 'Pending Tailor' | 'In Rework' | 'In Washing' | 'At Inward' | 'Re-Issue Requested' | 'Completed' | 'In Sorting' | 'Scrapped';
   route: string;
   actionText: string;
 }
@@ -55,6 +58,7 @@ export interface CartonRecord {
 }
 
 export interface GrnRemainingCaps {
+  sizePlanned: Record<string, number>;
   sizeRemaining: Record<string, number>;
   totalRemaining: number;
   sizeFormat: string;

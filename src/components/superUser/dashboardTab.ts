@@ -108,7 +108,7 @@ const exceptionRow = (cells: {
 
 /* ---------- render ---------- */
 
-export function renderDashboardTab(ctx: SuperUserRenderContext, totalScrapDeduction: number): string {
+export function renderDashboardTab(ctx: SuperUserRenderContext, _totalScrapDeduction: number): string {
   const s = ctx.rollupSummary;
   const hasDemoOrder = s.orderRollups.some(o => o.orderId === 'ORD-2026-600');
   const rawSearch = ctx.locationSearch ?? (typeof window !== 'undefined' ? window.location.search : '');
@@ -180,7 +180,7 @@ export function renderDashboardTab(ctx: SuperUserRenderContext, totalScrapDeduct
         unit: 'pairs in rework',
         valueClass: s.totalAlterationPairs > 0 ? 'su-db-neg' : '',
         lines: [
-          raw(html`Scrap <strong>${n(s.totalScrappedPairs)}</strong> pairs, debit <strong>PKR ${n(totalScrapDeduction)}</strong>`),
+          raw(html`Scrap <strong>${n(s.totalScrappedPairs)}</strong> pairs`),
           raw(html`Orders completed <strong>${n(s.completedOrders)} of ${n(s.totalOrders)}</strong>`)
         ],
         actionAttr: s.totalAlterationPairs > 0 ? 'data-admin-tab-jump="repair"' : ''

@@ -57,6 +57,8 @@ export function createEmptyPackingWipState() {
     altReqNo: getAlterationReqNumber(DEFAULT_REQ_NUMBER),
     mreqQty: '0 Sets',
     mreqStatus: 'Pending Stage 3',
+    mreqCoveredPairs: 0,
+    mreqIssuedPairs: 0,
     stage4In: 0,
     stage4Passed: 0,
     stage4Pending: 0,
@@ -282,12 +284,16 @@ export function getGrnRemainingCaps(orderId: string, maker?: string): GrnRemaini
     }
   }
 
+  const sizePlanned: Record<string, number> = {};
   const sizeRemaining: Record<string, number> = {};
   for (const size of activeSizes) {
-    sizeRemaining[size] = Math.max(0, Number(targetSizes[size] || 0) - receivedBySize[size]);
+    const planned = Math.max(0, Number(targetSizes[size] || 0));
+    sizePlanned[size] = planned;
+    sizeRemaining[size] = Math.max(0, planned - receivedBySize[size]);
   }
 
   return {
+    sizePlanned,
     sizeRemaining,
     totalRemaining: Math.max(0, targetPlannedTotal - receivedTotal),
     sizeFormat: order.sizeFormat || 'LEGACY_7_11',

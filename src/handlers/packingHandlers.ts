@@ -378,7 +378,7 @@ export function attachPackingHandlers(): void {
   let mreqInFlight = false;
   document.getElementById('btn-wip-generate-mreq-slip')?.addEventListener('click', async (event) => {
     if (!isStage3ClearedForMaterialReq(state.packingWip)) {
-      showToast('Material Requisition is locked until Stage 3 (Pair Matching) is cleared.');
+      showToast('Material Requisition is locked until Stage 3 (Pair Matching) produces matched pairs.');
       return;
     }
     if (mreqInFlight) return;
@@ -404,6 +404,7 @@ export function attachPackingHandlers(): void {
           }
 
           let matReq = createData.data;
+          let issuedNow = false;
           if (matReq.mat_req_number && matReq.status === 'PENDING') {
             const issueResp = await fetch(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {
               method: 'POST',
@@ -420,10 +421,19 @@ export function attachPackingHandlers(): void {
               return;
             }
             matReq = issueData.data;
+            issuedNow = true;
           }
 
           state.packingWip.mreqStatus = matReq.status || 'ISSUED';
           (state.packingWip as any).matReqNumber = matReq.mat_req_number || '';
+          if (issuedNow) {
+            const issuedPairs = Math.min(
+              state.packingWip.stage3Passed,
+              Number(state.packingWip.mreqIssuedPairs || 0) + Number(matReq.pairs_count || 0)
+            );
+            state.packingWip.mreqIssuedPairs = issuedPairs;
+            state.packingWip.mreqCoveredPairs = issuedPairs;
+          }
           saveCurrentOrderWipState();
           renderApp();
         } catch (error) {
@@ -433,6 +443,8 @@ export function attachPackingHandlers(): void {
         }
       } else {
         state.packingWip.mreqStatus = 'ISSUED';
+        state.packingWip.mreqIssuedPairs = state.packingWip.stage3Passed;
+        state.packingWip.mreqCoveredPairs = state.packingWip.stage3Passed;
         saveCurrentOrderWipState();
         renderApp();
       }
@@ -446,7 +458,7 @@ export function attachPackingHandlers(): void {
 
   document.getElementById('btn-wip-print-mreq-slip')?.addEventListener('click', () => {
     if (!isStage3ClearedForMaterialReq(state.packingWip)) {
-      showToast('Material Requisition can only be printed after Stage 3 (Pair Matching) is cleared.');
+      showToast('Material Requisition can only be printed after Stage 3 (Pair Matching) produces matched pairs.');
       return;
     }
     const mreqId = getMaterialReqNumber(state.packingWip.selectedBatch);
@@ -456,7 +468,7 @@ export function attachPackingHandlers(): void {
   // Stage 4 Modal
   document.getElementById('btn-wip-step4')?.addEventListener('click', () => {
     if (!isMaterialRequisitionIssuedForStage4(state.packingWip)) {
-      showToast('Stage 4 locked: Clear Stage 3 and generate the Material Requisition slip first.');
+      showToast('Stage 4 locked: Generate the Material Requisition slip first.');
       return;
     }
     const available = Math.max(0, state.packingWip.stage4In - state.packingWip.stage4Passed);
@@ -536,6 +548,34 @@ export function attachPackingHandlers(): void {
 
   // Stage 5 Modal (4.2: Enforces Stage 4 -> Final QC -> Stage 5 Lock Gate + Partial Split Shipping)
   document.getElementById('btn-wip-step5')?.addEventListener('click', () => openStage5BoxingModal());
+
+  // Rework Re-Issue Request (Packing Hall requests repaired pairs waiting at Inward Register under original REQ)
+  let reworkReissueInFlight = false;
+  document.getElementById('btn-wip-request-rework-reissue')?.addEventListener('click', async (event) => {
+    if (reworkReissueInFlight) return;
+    const btn = event.currentTarget as HTMLButtonElement | null;
+    const reqNo = normalizeBaseReqNumber(btn?.dataset.reqNumber || state.packingWip.selectedBatch);
+    if (!reqNo) return;
+    reworkReissueInFlight = true;
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(`/api/requisitions/${encodeURIComponent(reqNo)}/request-rework-reissue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || `Unable to request rework re-issue for ${reqNo}.`);
+      }
+      await syncBackendData();
+      showToast(json.data?.message || `Requested Inward Register re-issue for ${reqNo}.`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : `Unable to request rework re-issue for ${reqNo}.`);
+    } finally {
+      reworkReissueInFlight = false;
+      if (btn?.isConnected) btn.disabled = false;
+    }
+  });
 
   // --- Section: New Req, Shift Export & Labels ---
   // Packing Hall Generates Requisition Asking (Inward Register Person Issues Given Available Stock)

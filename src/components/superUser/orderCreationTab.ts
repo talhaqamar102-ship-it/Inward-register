@@ -81,13 +81,13 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
 
   return `
     <!-- 7.1: Super User Master Order Creation Suite (Primary View) -->
-    <section class="panel-card" style="margin-bottom: 14px;">
+    <section class="panel-card su-order-hub" style="margin-bottom: 14px;">
       <div class="panel-card-header">
         <div class="panel-card-title">
-          <span>1. Super User Master Order Creation &amp; Pending Orders Hub (SQLite Persistent)</span>
-          <span class="panel-counter-badge">${ctx.pendingOrders.length} Database Orders</span>
+          <span>1. Order creation</span>
+          <span class="panel-counter-badge">${ctx.pendingOrders.length} ${ctx.pendingOrders.length === 1 ? 'order' : 'orders'}</span>
         </div>
-        <span class="admin-meta-caption">Parent Order Container &mdash; Receives Multiple GRNs (0001, 0002...) &amp; Multiple REQs (0001, 0002... &rarr; M &amp; A)</span>
+        <span class="admin-meta-caption">One order can receive multiple GRNs and REQs.</span>
       </div>
       <div style="padding: 14px 16px;">
         <div class="su-order-form-grid">
@@ -359,12 +359,12 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
             : `
         <div class="su-order-matrix-card">
           <div class="su-order-matrix-header">
-            <span style="font-weight: 700; color: var(--ink-950); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em;">
-              Planned Order Size Breakdown Matrix (Pairs &bull; Scale: ${escapeHtml(activeSizeFormat)}, ${activeSizeCodes.length} Sizes)
+            <span style="font-weight: 500; color: var(--ink-950); font-size: 13px;">
+              Size breakdown &middot; ${activeSizeCodes.length} sizes
             </span>
             <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
               ${availableStandards.length > 0 ? `
-                <label for="admin-order-size-format" style="font-size: 11.5px; font-weight: 600; color: var(--ink-700);">Size Scale:</label>
+                <label for="admin-order-size-format" style="font-size: 11.5px; font-weight: 500; color: var(--ink-700);">Size scale:</label>
                 <select id="admin-order-size-format" class="form-select" style="width: auto; min-width: 165px; padding: 4px 8px; font-size: 12px;">
                   ${availableStandards.map((s: any) => `<option value="${escapeHtml(s.code)}" ${activeSizeFormat === s.code ? 'selected' : ''}>${escapeHtml(s.rawLabel || s.code)}</option>`).join('')}
                 </select>
@@ -456,16 +456,15 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
 
         <div class="su-order-action-row">
           <span style="font-size: 12px; color: var(--su-text-secondary);">
-            <span class="su-required-mark" aria-hidden="true">*</span> Required fields &bull;
-            Orders are saved directly to SQLite (<code>pending_orders</code>) and populate the Inward Receiving dropdown for multiple GRN batches and Packing Hall REQs.
+            <span class="su-required-mark" aria-hidden="true">*</span> Required fields. Saved orders appear in Inward Receiving and Packing Hall.
           </span>
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
             ${multiMode ? `<span id="admin-multi-total-summary" class="su-multi-total-pill">${articleLines.length} ${articleLines.length === 1 ? 'Article' : 'Sub-orders'} &middot; ${multiGrandTotal.toLocaleString()} Pairs</span>` : ''}
             <button type="button" class="btn-outline" id="btn-admin-reset-pending-order">
-              Reset Form
+              Reset form
             </button>
             <button type="button" class="btn-primary" id="btn-admin-add-pending-order" style="padding: 7px 18px;">
-              ${articleLines.length >= 2 ? `Save &amp; Issue ${articleLines.length} Sub-Orders` : 'Save &amp; Issue Master Order'}
+              ${articleLines.length >= 2 ? `Save &amp; issue ${articleLines.length} sub-orders` : 'Save &amp; issue order'}
             </button>
           </div>
         </div>
@@ -495,7 +494,7 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
               ${
                 ctx.pendingOrders.length === 0
                   ? `
-                <tr><td colspan="15" class="table-empty-cell">No orders in database yet. Fill out the form above and click "Save &amp; Issue Master Order".</td></tr>
+                <tr><td colspan="15" class="table-empty-cell">No orders in database yet. Fill out the form above and click "Save &amp; issue order".</td></tr>
               `
                   : ctx.pendingOrders
                       .map(o => {
@@ -564,12 +563,12 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
       return `
     <div class="su-registries-toolbar">
       <div class="su-registries-toolbar-title">
-        <span>Master Registries &amp; System Administration (Sections 2&ndash;6)</span>
-        <span class="admin-meta-caption">Click any card header to expand full-width or collapse</span>
+        <span>Master registries</span>
+        <span class="admin-meta-caption">Click a row to expand or collapse. Open rows span the full width.</span>
       </div>
       <div class="su-registries-toolbar-actions">
-        <button type="button" class="btn-outline" style="padding: 4px 10px; font-size: 11.5px;" data-su-action="toggle-all-registries" data-expanded="true">Expand All Registries</button>
-        <button type="button" class="btn-outline" style="padding: 4px 10px; font-size: 11.5px;" data-su-action="toggle-all-registries" data-expanded="false">Collapse All Registries</button>
+        <button type="button" class="btn-outline" style="padding: 4px 10px; font-size: 11.5px;" data-su-action="toggle-all-registries" data-expanded="true">Expand all</button>
+        <button type="button" class="btn-outline" style="padding: 4px 10px; font-size: 11.5px;" data-su-action="toggle-all-registries" data-expanded="false">Collapse all</button>
       </div>
     </div>
 
@@ -578,7 +577,6 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
       <details class="su-collapsible-registry" data-registry-id="buyers" ${isRegOpen('buyers', true) ? 'open' : ''}>
         <summary>
           <span class="su-registry-summary-main">
-            <span class="su-registry-step-badge">02</span>
             <span class="su-registry-title-text">2. Customer &amp; Buyer Master Registry (${ov.customers.length} Buyers)</span>
           </span>
           <span class="su-registry-summary-meta">
@@ -636,7 +634,6 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
       <details class="su-collapsible-registry" data-registry-id="articles" ${isRegOpen('articles', true) ? 'open' : ''}>
         <summary>
           <span class="su-registry-summary-main">
-            <span class="su-registry-step-badge">03</span>
             <span class="su-registry-title-text">3. Glove Article &amp; Packaging BOM Master (${ov.products.length} Articles)</span>
           </span>
           <span class="su-registry-summary-meta">
@@ -720,7 +717,6 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
       <details class="su-collapsible-registry" data-registry-id="makers_pos" ${isRegOpen('makers_pos', false) ? 'open' : ''}>
         <summary>
           <span class="su-registry-summary-main">
-            <span class="su-registry-step-badge">04</span>
             <span class="su-registry-title-text">4. Contractors / Makers (${ctx.dropdownOptions.makers.length}), Halls (${(ctx.dropdownOptions.halls || []).length}) &amp; PO Registry (${ctx.dropdownOptions.poList.length})</span>
           </span>
           <span class="su-registry-summary-meta">
@@ -733,7 +729,7 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
         </summary>
         <div class="su-collapsible-body">
           <div style="margin-bottom: 12px;">
-            <div style="font-size: 11.5px; font-weight: 700; color: var(--ink-600); margin-bottom: 6px; text-transform: uppercase;">Active Makers / Contractors (${ctx.dropdownOptions.makers.length})</div>
+            <div style="font-size: 11.5px; font-weight: 500; color: var(--ink-600); margin-bottom: 6px;">Active makers / contractors (${ctx.dropdownOptions.makers.length})</div>
             <div style="display: flex; gap: 8px; margin-bottom: 8px;">
               <input type="text" id="admin-add-maker-input" class="form-input" style="flex: 1;" placeholder="Add Maker / Contractor (e.g. Usman Hall)" />
               <button class="btn-primary" id="btn-admin-add-maker">Add Maker</button>
@@ -861,7 +857,6 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
       <details class="su-collapsible-registry" data-registry-id="audit_trail" ${isRegOpen('audit_trail', false) ? 'open' : ''}>
         <summary>
           <span class="su-registry-summary-main">
-            <span class="su-registry-step-badge">05</span>
             <span class="su-registry-title-text">5. Immutable Audit Trail Ledger (${auditTrail.length} Recorded Events)</span>
           </span>
           <span class="su-registry-summary-meta">
@@ -909,7 +904,6 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
       <details class="su-collapsible-registry" data-registry-id="sqlite_wal" ${isRegOpen('sqlite_wal', false) ? 'open' : ''}>
         <summary>
           <span class="su-registry-summary-main">
-            <span class="su-registry-step-badge">06</span>
             <span class="su-registry-title-text">6. SQLite WAL Database &amp; Snapshot Administration (${ov.dbHealth.totalTables} Tables &bull; ${totalRows} Rows)</span>
           </span>
           <span class="su-registry-summary-meta">
@@ -968,7 +962,6 @@ export function renderOrderCreationTab(ctx: SuperUserRenderContext): string {
       <details class="su-collapsible-registry" data-registry-id="phased_rollout" ${isRegOpen('phased_rollout', false) ? 'open' : ''}>
         <summary>
           <span class="su-registry-summary-main">
-            <span class="su-registry-step-badge">POLICY</span>
             <span class="su-registry-title-text">Phased Rollout Record (Phase A &bull; Phase B &bull; Phase C) &amp; Active MES Policy Defaults</span>
           </span>
           <span class="su-registry-summary-meta">

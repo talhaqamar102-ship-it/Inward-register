@@ -22,6 +22,12 @@ export interface RepairAndQcStateShape {
   cartons: Array<Record<string, any>>;
 }
 
+function isBenchReworkDefect(d: Record<string, any>): boolean {
+  const stage = String(d.handoffStage || '');
+  if (stage) return stage === 'PENDING_TAILOR' || stage === 'WITH_TAILOR';
+  return d.status === 'Pending Tailor' || d.status === 'In Rework' || d.rawStatus === 'SENT_FOR_ALTERATION';
+}
+
 function resolveAlterationSelectionContext(
   state: RepairAndQcStateShape & { ordersWipMap?: Record<string, any> }
 ) {
@@ -46,9 +52,7 @@ function resolveAlterationSelectionContext(
       d => getAlterationReqNumber(d.reqNumber || d.id) === altReqId || normalizeBaseReqNumber(d.reqNumber || d.id) === base
     );
     if (matchingDefects.length > 0) {
-      return matchingDefects.some(
-        d => d.rawStatus === 'SENT_FOR_ALTERATION' || d.status === 'In Rework'
-      );
+      return matchingDefects.some(isBenchReworkDefect);
     }
     const wipEntry = normalizeBaseReqNumber(state.packingWip?.selectedBatch) === base
       ? state.packingWip
@@ -159,9 +163,7 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
   const aReq = ctx.selectedBatchId || (showHistory ? getAlterationReqNumber(state.packingWip.selectedBatch) : 'No active requisition');
   const isCleared = Boolean(ctx.selectedBatchId) && ctx.lockedQty <= 0 && ctx.batchDefects.length > 0;
   const visibleDefects = showHistory ? state.defectList : ctx.batchDefects;
-  const historyTotalCount = (state.defectList || []).filter(
-    d => !(d.rawStatus === 'SENT_FOR_ALTERATION' || d.status === 'In Rework')
-  ).length;
+  const historyTotalCount = (state.defectList || []).filter(d => !isBenchReworkDefect(d)).length;
   const historyClockSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>`;
   const halls = Array.isArray(state.dropdownOptions?.halls) ? state.dropdownOptions.halls : [];
   const hallStitcherNames: string[] = [];
@@ -181,12 +183,8 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
     tailor => tailor.toLocaleLowerCase() === String(state.repairForm.tailor || '').toLocaleLowerCase()
   );
 
-  const activeBenchDefects = visibleDefects.filter(
-    d => d.rawStatus === 'SENT_FOR_ALTERATION' || d.status === 'In Rework'
-  );
-  const completedDefects = visibleDefects.filter(
-    d => !(d.rawStatus === 'SENT_FOR_ALTERATION' || d.status === 'In Rework')
-  );
+  const activeBenchDefects = visibleDefects.filter(isBenchReworkDefect);
+  const completedDefects = visibleDefects.filter(d => !isBenchReworkDefect(d));
   const rowPairs = (d: Record<string, any>): number =>
     Number(d.pairsCount) || parseInt(String(d.qty || '0'), 10) || 0;
   const activeBenchPairs = activeBenchDefects.reduce((sum, d) => sum + rowPairs(d), 0);
@@ -199,19 +197,26 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
   for (const d of visibleDefects) {
     const reason = String(d.defectClass || 'Workmanship Defect').trim();
     const prs = rowPairs(d);
-    const isActive = d.rawStatus === 'SENT_FOR_ALTERATION' || d.status === 'In Rework';
+    const isActive = isBenchReworkDefect(d);
+    const nonBenchLabel =
+      (d.status === 'Scrapped' || d.handoffStage === 'SCRAPPED') ? 'Scrapped'
+      : (d.handoffStage === 'RECEIVED_AT_INWARD' || d.status === 'At Inward') ? 'Received at Inward'
+      : (d.handoffStage === 'REISSUE_REQUESTED' || d.status === 'Re-Issue Requested') ? 'Re-issue requested'
+      : 'Re-issued to stage 1';
     const existing = paretoMap.get(reason);
     if (existing) {
       existing.pairs += prs;
       if (isActive) {
-        existing.statusLabel = 'In rework';
+        existing.statusLabel = d.handoffStage === 'PENDING_TAILOR' ? 'Pending tailor' : 'In rework';
         existing.tailor = String(d.tailor || existing.tailor);
       }
     } else {
       paretoMap.set(reason, {
         pairs: prs,
-        statusLabel: isActive ? 'In rework' : (d.status === 'Scrapped' ? 'Scrapped' : 'Returned to stage 1'),
-        tailor: String(d.tailor || 'Supervisor A')
+        statusLabel: isActive
+          ? (d.handoffStage === 'PENDING_TAILOR' ? 'Pending tailor' : 'In rework')
+          : nonBenchLabel,
+        tailor: String(d.tailor || (isActive ? 'Unassigned' : 'Supervisor A'))
       });
     }
   }
@@ -316,7 +321,7 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
                 <span class="rep-card-title">In rework</span>
                 <span class="rep-card-meta">${activeBenchDefects.length} ${activeBenchDefects.length === 1 ? 'batch' : 'batches'} &middot; ${activeBenchPairs} pairs</span>
               </div>
-              <span class="rep-card-note">Returned pairs go to stage 1, checking and inspection</span>
+              <span class="rep-card-note">Assign a tailor first, then receive repaired pairs back into Inward Register</span>
             </div>
             <div class="table-responsive">
               <table class="rep-table">
@@ -337,9 +342,17 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
                     </tr>
                   ` : activeBenchDefects.map(defect => {
                     const prs = rowPairs(defect);
+                    const isAssigned = Boolean(
+                      defect.tailorAssigned ??
+                      (defect.handoffStage ? defect.handoffStage !== 'PENDING_TAILOR' : (defect.tailor && defect.tailor !== 'Supervisor A'))
+                    );
+                    const tailorDisplay = isAssigned && defect.tailor ? defect.tailor : 'Unassigned';
                     return `
                       <tr>
-                        <td style="font-weight: 500; white-space: nowrap;">${escapeHtml(defect.tailor || 'Unassigned')}</td>
+                        <td style="font-weight: 500; white-space: nowrap;">
+                          ${escapeHtml(tailorDisplay)}
+                          ${isAssigned ? '' : '<span class="rep-subline">Assign tailor first</span>'}
+                        </td>
                         <td>
                           <span>${escapeHtml(defect.defectClass)}</span>
                           <span class="rep-subline">${escapeHtml(defect.origin)}${showHistory ? ` &middot; ${escapeHtml(defect.id)}` : ''}</span>
@@ -349,9 +362,9 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
                           ${defect.altId
                             ? `<div class="rep-row-actions">
                                 <input type="number" class="rep-row-qty" data-alt-qty-id="${defect.altId}" min="1" max="${prs}" value="${prs}" aria-label="Pairs to process for ${escapeHtml(defect.defectClass)}" />
-                                <button type="button" class="rep-row-return" data-alt-row-return="${defect.altId}" data-alt-tailor="${escapeHtml(defect.tailor || 'Supervisor A')}" data-alt-req="${escapeHtml(defect.id)}">Return</button>
-                                <button type="button" class="rep-row-scrap" data-alt-row-scrap="${defect.altId}" data-alt-tailor="${escapeHtml(defect.tailor || 'Scrap Authority')}" data-alt-req="${escapeHtml(defect.id)}">Scrap</button>
-                                <button type="button" class="rep-row-print" data-alt-row-print="${defect.altId}" data-alt-tailor="${escapeHtml(defect.tailor || 'Supervisor A')}" data-alt-req="${escapeHtml(defect.id)}" data-alt-defect="${escapeHtml(defect.defectClass)}" data-alt-pairs="${prs}" title="Print Defect Route Tag" aria-label="Print Defect Route Tag">&#128424;</button>
+                                <button type="button" class="rep-row-return" data-alt-row-receive="${defect.altId}" data-alt-tailor="${escapeHtml(tailorDisplay)}" data-alt-req="${escapeHtml(defect.id)}" ${isAssigned ? '' : 'disabled title="Assign a tailor first before receiving repaired pairs into Inward Register"'}>Receive at Inward</button>
+                                <button type="button" class="rep-row-scrap" data-alt-row-scrap="${defect.altId}" data-alt-tailor="${escapeHtml(isAssigned ? tailorDisplay : 'Scrap Authority')}" data-alt-req="${escapeHtml(defect.id)}">Scrap</button>
+                                <button type="button" class="rep-row-print" data-alt-row-print="${defect.altId}" data-alt-tailor="${escapeHtml(tailorDisplay)}" data-alt-req="${escapeHtml(defect.id)}" data-alt-defect="${escapeHtml(defect.defectClass)}" data-alt-pairs="${prs}" title="Print Defect Route Tag" aria-label="Print Defect Route Tag">&#128424;</button>
                               </div>`
                             : `<span style="font-size: 11.5px; color: var(--ink-500);">Pending</span>`}
                         </td>
@@ -366,7 +379,7 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
           <section class="rep-card" id="repair-completed-ledger-panel">
             <div class="rep-card-head">
               <div>
-                <span class="rep-card-title">Returned and scrap</span>
+                <span class="rep-card-title">Inward handoff, returned &amp; scrap</span>
                 <span class="rep-card-meta">${completedDefects.length} ${completedDefects.length === 1 ? 'record' : 'records'} &middot; ${completedPairs} pairs</span>
               </div>
             </div>
@@ -384,12 +397,29 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
                   ${completedDefects.length === 0 ? `
                     <tr>
                       <td colspan="4" style="text-align: center; padding: 24px 14px; color: var(--ink-500);">
-                        No returned or scrapped records yet.
+                        No Inward handoff, returned, or scrapped records yet.
                       </td>
                     </tr>
                   ` : completedDefects.map(defect => {
                     const prs = rowPairs(defect);
-                    const isScrapped = defect.status === 'Scrapped';
+                    const isScrapped = defect.status === 'Scrapped' || defect.handoffStage === 'SCRAPPED';
+                    const isAtInward = defect.handoffStage === 'RECEIVED_AT_INWARD' || defect.status === 'At Inward';
+                    const isReissueReq = defect.handoffStage === 'REISSUE_REQUESTED' || defect.status === 'Re-Issue Requested';
+                    const outcomeLabel = isScrapped
+                      ? 'Scrapped'
+                      : isAtInward
+                        ? 'Received at Inward'
+                        : isReissueReq
+                          ? 'Re-issue requested'
+                          : 'Re-issued to stage 1';
+                    const outcomeSub = isScrapped
+                      ? 'Contractor debit'
+                      : isAtInward
+                        ? 'Awaiting Packing Hall REQ'
+                        : isReissueReq
+                          ? 'Ready in Inward REQ Queue'
+                          : 'Verified';
+                    const outcomeIcon = isScrapped ? '&times;' : (isAtInward || isReissueReq ? '&rarr;' : '&#10003;');
                     return `
                       <tr>
                         <td style="white-space: nowrap;">${escapeHtml(defect.date)}</td>
@@ -400,10 +430,10 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
                         <td style="font-weight: 600; white-space: nowrap;">${prs}</td>
                         <td>
                           <span>
-                            <span class="${isScrapped ? 'rep-outcome-scrap' : 'rep-outcome-ok'}">${isScrapped ? '&times;' : '&#10003;'}</span>
-                            ${isScrapped ? 'Scrapped' : 'Returned to stage 1'}
+                            <span class="${isScrapped ? 'rep-outcome-scrap' : 'rep-outcome-ok'}">${outcomeIcon}</span>
+                            ${outcomeLabel}
                           </span>
-                          <span class="rep-subline">${escapeHtml(defect.tailor)} &middot; ${isScrapped ? 'Contractor debit' : 'Verified'}</span>
+                          <span class="rep-subline">${escapeHtml(defect.tailor || 'Supervisor A')} &middot; ${outcomeSub}</span>
                         </td>
                       </tr>
                     `;
@@ -454,7 +484,7 @@ export function renderRepairScreen(state: RepairAndQcStateShape & { ordersWipMap
 
         <!-- Quiet Footer Line -->
         <footer class="rep-footer-line">
-          Today in the bay: ${totalReworkedToday} batches reworked &middot; ${totalCompletedToday} returned to stage 1 &middot; ${totalScrappedToday} scrapped
+          Today in the bay: ${totalReworkedToday} batches reworked &middot; ${totalCompletedToday} re-issued to stage 1 &middot; ${totalScrappedToday} scrapped
         </footer>
       </div>
     </main>

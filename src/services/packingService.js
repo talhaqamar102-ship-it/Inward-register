@@ -62,6 +62,27 @@ const wholeCount = (v, label) => {
   return n;
 };
 
+function getMaterialReqCoverage(reqNumber) {
+  const row = db.prepare(`
+    SELECT COALESCE(SUM(pairs_count), 0) AS covered,
+           COALESCE(SUM(CASE WHEN status = 'ISSUED' THEN pairs_count ELSE 0 END), 0) AS issued
+    FROM material_requisitions WHERE req_number = ?
+  `).get(reqNumber);
+  return {
+    materialReqCoveredPairs: Number(row.covered || 0),
+    materialReqIssuedPairs: Number(row.issued || 0)
+  };
+}
+
+function getIssuedOrLatestMaterialReq(reqNumber) {
+  return db.prepare(`
+    SELECT * FROM material_requisitions
+    WHERE req_number = ?
+    ORDER BY CASE WHEN status = 'ISSUED' THEN 0 ELSE 1 END, created_at DESC, mat_req_number DESC
+    LIMIT 1
+  `).get(reqNumber) || null;
+}
+
 export class PackingService {
   // --- INVENTORY LOOKUPS ---
   static getGloveInventory() {
@@ -267,7 +288,8 @@ export class PackingService {
         sizeCodes: scaleCodes,
         sizes: parseRequisitionSizes(row.sizes_json, scaleCodes),
         wip: db.prepare(`SELECT * FROM packing_wip WHERE req_number = ?`).get(row.req_number) || null,
-        materialReq: db.prepare(`SELECT * FROM material_requisitions WHERE req_number = ?`).get(row.req_number) || null,
+        materialReq: getIssuedOrLatestMaterialReq(row.req_number),
+        ...getMaterialReqCoverage(row.req_number),
         cartons: db.prepare(`SELECT * FROM cartons WHERE req_number = ? ORDER BY carton_number`).all(row.req_number),
         alterations: db.prepare(`SELECT * FROM alterations WHERE req_number = ? ORDER BY id DESC`).all(row.req_number)
       };
@@ -293,7 +315,7 @@ export class PackingService {
     req.sizes = parseRequisitionSizes(req.sizes_json, scaleCodes);
 
     const wip = db.prepare(`SELECT * FROM packing_wip WHERE req_number = ?`).get(reqNumber);
-    const materialReq = db.prepare(`SELECT * FROM material_requisitions WHERE req_number = ?`).get(reqNumber);
+    const materialReq = getIssuedOrLatestMaterialReq(reqNumber);
     const alterations = db.prepare(`SELECT * FROM alterations WHERE req_number = ? ORDER BY id DESC`).all(reqNumber);
     const cartons = db.prepare(`SELECT * FROM cartons WHERE req_number = ? ORDER BY carton_number`).all(reqNumber);
     const inspections = db.prepare(`SELECT * FROM final_inspections WHERE req_number = ? ORDER BY id DESC`).all(reqNumber);
@@ -302,6 +324,7 @@ export class PackingService {
       ...req,
       wip: wip || null,
       materialReq: materialReq || null,
+      ...getMaterialReqCoverage(reqNumber),
       alterations,
       cartons,
       inspections
@@ -390,8 +413,8 @@ export class PackingService {
       // If defects found, log to Alteration
       if (defectPairs > 0) {
         db.prepare(`
-          INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, status)
-          VALUES (?, 'STEP_1_CHECKING', ?, ?, 'SENT_FOR_ALTERATION')
+          INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, tailor_name, tailor_assigned, handoff_stage, status)
+          VALUES (?, 'STEP_1_CHECKING', ?, ?, '', 0, 'PENDING_TAILOR', 'SENT_FOR_ALTERATION')
         `).run(reqNumber, defectPairs, defectReason || 'Failed Checking Inspection');
       }
 
@@ -425,11 +448,11 @@ export class PackingService {
         WHERE req_number = ?
       `).run(goodPairs, defectPairs, goodPairs, goodPairs, defectPairs, reqNumber);
 
-      // If defects found, log to Alteration (loops back to Step 1 upon return)
+      // If defects found, log to Alteration (loops back to Step 1 via Inward upon return)
       if (defectPairs > 0) {
         db.prepare(`
-          INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, status)
-          VALUES (?, 'STEP_2_IRONING', ?, ?, 'SENT_FOR_ALTERATION')
+          INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, tailor_name, tailor_assigned, handoff_stage, status)
+          VALUES (?, 'STEP_2_IRONING', ?, ?, '', 0, 'PENDING_TAILOR', 'SENT_FOR_ALTERATION')
         `).run(reqNumber, defectPairs, defectReason || 'Ironing/Brushing Workmanship Defect');
       }
 
@@ -462,11 +485,11 @@ export class PackingService {
         WHERE req_number = ?
       `).run(goodPairs, defectPairs, goodPairs, defectPairs, reqNumber);
 
-      // If defects found, log to Alteration (loops back to Step 1 upon return)
+      // If defects found, log to Alteration (loops back to Step 1 via Inward upon return)
       if (defectPairs > 0) {
         db.prepare(`
-          INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, status)
-          VALUES (?, 'STEP_3_MATCHING', ?, ?, 'SENT_FOR_ALTERATION')
+          INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, tailor_name, tailor_assigned, handoff_stage, status)
+          VALUES (?, 'STEP_3_MATCHING', ?, ?, '', 0, 'PENDING_TAILOR', 'SENT_FOR_ALTERATION')
         `).run(reqNumber, defectPairs, defectReason || 'Mismatch in pair sizing or shade difference');
       }
 
@@ -482,15 +505,24 @@ export class PackingService {
       throw new Error(`Step 3 Matching has no completed good pairs yet.`);
     }
 
-    const existingMatReq = db.prepare(`SELECT * FROM material_requisitions WHERE req_number = ?`).get(reqNumber);
-    if (existingMatReq) {
-      return existingMatReq;
+    const goodPairs = req.wip.step3_matching_good;
+    const coveredRow = db.prepare(`
+      SELECT COALESCE(SUM(pairs_count), 0) AS covered
+      FROM material_requisitions WHERE req_number = ?
+    `).get(reqNumber);
+    const uncoveredPairs = goodPairs - Number(coveredRow.covered || 0);
+    if (uncoveredPairs <= 0) {
+      const existingMatReq = db.prepare(`
+        SELECT * FROM material_requisitions WHERE req_number = ?
+        ORDER BY created_at DESC, mat_req_number DESC LIMIT 1
+      `).get(reqNumber);
+      if (existingMatReq) return existingMatReq;
+      throw new Error(`No matched pairs are awaiting a material requisition for ${reqNumber}.`);
     }
 
-    const goodPairs = req.wip.step3_matching_good;
-    const polybags = goodPairs * req.polybag_per_pair;
-    const silicaGel = goodPairs * req.silica_gel_per_pair;
-    const stickers = goodPairs * req.stickers_per_pair;
+    const polybags = uncoveredPairs * req.polybag_per_pair;
+    const silicaGel = uncoveredPairs * req.silica_gel_per_pair;
+    const stickers = uncoveredPairs * req.stickers_per_pair;
 
     const year = new Date().getFullYear();
     const countRow = db.prepare(`
@@ -505,7 +537,7 @@ export class PackingService {
         polybags_requested, silica_gel_requested, stickers_requested, status
       )
       VALUES (?, ?, ?, ?, ?, ?, 'PENDING')
-    `).run(matReqNumber, reqNumber, goodPairs, polybags, silicaGel, stickers);
+    `).run(matReqNumber, reqNumber, uncoveredPairs, polybags, silicaGel, stickers);
 
     return db.prepare(`SELECT * FROM material_requisitions WHERE mat_req_number = ?`).get(matReqNumber);
   }
@@ -972,8 +1004,8 @@ export class PackingService {
 
       // Create alteration entry with source FINAL_INSPECTION
       db.prepare(`
-        INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, status)
-        VALUES (?, 'FINAL_INSPECTION', ?, ?, 'SENT_FOR_ALTERATION')
+        INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, tailor_name, tailor_assigned, handoff_stage, status)
+        VALUES (?, 'FINAL_INSPECTION', ?, ?, '', 0, 'PENDING_TAILOR', 'SENT_FOR_ALTERATION')
       `).run(reqNumber, defectivePairs, defectNotes || 'Defect found during final carton audit');
     }
 
@@ -989,7 +1021,10 @@ export class PackingService {
     // Update alteration status
     db.prepare(`
       UPDATE alterations 
-      SET status = 'RETURNED_TO_CHECKING', returned_at = CURRENT_TIMESTAMP 
+      SET status = 'RETURNED_TO_CHECKING',
+          handoff_stage = 'REISSUED_TO_PACKING',
+          reissued_at = CURRENT_TIMESTAMP,
+          returned_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(alterationId);
 
@@ -1010,7 +1045,7 @@ export class PackingService {
       return db.prepare(`SELECT * FROM alterations WHERE req_number = ? ORDER BY id DESC`).all(reqNumber);
     }
     return db.prepare(`
-      SELECT a.*, r.customer_id, c.name AS customer_name, p.name AS product_name
+      SELECT a.*, r.order_id, r.customer_id, c.name AS customer_name, p.name AS product_name
       FROM alterations a
       JOIN glove_requisitions r ON a.req_number = r.req_number
       JOIN customers c ON r.customer_id = c.id
@@ -1183,6 +1218,36 @@ export class PackingService {
             throw new Error(
               `Receiving ${rcvdNum} pairs for ${matchedAlloc.maker_contractor} exceeds their remaining allocation (${rem} pairs left on ${orderIdVal})`
             );
+          }
+        }
+      }
+    }
+
+    if (linkedOrder && strictInwardEntry && Array.isArray(sizes) && sizes.length > 0) {
+      const stockSummary = this.getOrderStockSummary(linkedOrder);
+      const plannedSum = Object.values(stockSummary.plannedSizes || {}).reduce((s, v) => s + Number(v || 0), 0);
+      if (plannedSum > 0) {
+        const matchedAllocSummary = (stockSummary.contractorAllocations || []).find(
+          a => String(a.maker || '').trim().toLowerCase() === effectiveMakerContractor.toLowerCase()
+        );
+        const plannedBySize = matchedAllocSummary ? matchedAllocSummary.sizes : stockSummary.plannedSizes;
+        const remainingBySize = matchedAllocSummary
+          ? matchedAllocSummary.remainingSizes
+          : Object.fromEntries(
+              Object.keys(stockSummary.plannedSizes || {}).map(sz => [
+                sz,
+                Math.max(0, Number(stockSummary.plannedSizes[sz] || 0) - Number(stockSummary.receivedSizes?.[sz] || 0))
+              ])
+            );
+        for (const s of sizes) {
+          const sz = String(s?.sizeCode || '').trim();
+          const szRcvd = Number(s?.rcvdPairs || 0);
+          if (sz && szRcvd > 0) {
+            const szPlanned = Number(plannedBySize?.[sz] ?? 0);
+            const szRemaining = Number(remainingBySize?.[sz] ?? 0);
+            if (szPlanned <= 0 || szRemaining <= 0) {
+              throw httpErr(`Size ${sz} has 0 remaining pairs for ${orderIdVal}.`, 400);
+            }
           }
         }
       }
@@ -1454,37 +1519,46 @@ export class PackingService {
     return db.prepare(`SELECT * FROM material_return_vouchers WHERE mrv_number = ?`).get(mrvNumber);
   }
 
-  // --- CLOSED LOOP ALTERATION REWORK (Max 2-Rework Scrap Rule) ---
+  // --- CLOSED LOOP ALTERATION REWORK (Tailor -> Inward -> Packing REQ Re-Issue -> Stage 1, Max 2-Rework Scrap Rule) ---
   static assignAlterationTailor(reqNumber, tailorName, alterationId = null, pairsToAssign = null) {
     const cleanTailor = String(tailorName || '').trim();
-    if (!cleanTailor) throw new Error('Select or enter a tailor name before assigning.');
+    if (!cleanTailor) throw httpErr('Select or enter a tailor name before assigning.', 400);
     return runAtomicWipStep(() => {
       if (alterationId != null && Number(alterationId) > 0) {
         const res = db.prepare(`
           UPDATE alterations
-          SET tailor_name = ?
-          WHERE id = ? AND status = 'SENT_FOR_ALTERATION'
+          SET tailor_name = ?,
+              tailor_assigned = 1,
+              handoff_stage = 'WITH_TAILOR',
+              assigned_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+            AND status = 'SENT_FOR_ALTERATION'
+            AND COALESCE(handoff_stage, 'PENDING_TAILOR') IN ('PENDING_TAILOR', 'WITH_TAILOR')
         `).run(cleanTailor, Number(alterationId));
-        if (!res.changes) throw new Error(`No active alteration ticket #${alterationId} found to assign.`);
-        return { reqNumber, alterationId: Number(alterationId), tailorName: cleanTailor, updatedCount: res.changes };
+        if (!res.changes) throw httpErr(`No active alteration ticket #${alterationId} found on the bench to assign.`, 409);
+        return { reqNumber, alterationId: Number(alterationId), tailorName: cleanTailor, handoffStage: 'WITH_TAILOR', updatedCount: res.changes };
       }
 
       const cleanReq = String(reqNumber || '').trim();
-      if (!cleanReq) throw new Error('Requisition number is required.');
+      if (!cleanReq) throw httpErr('Requisition number is required.', 400);
 
       const openRows = db.prepare(`
         SELECT * FROM alterations
-        WHERE req_number = ? AND status = 'SENT_FOR_ALTERATION'
-        ORDER BY CASE WHEN COALESCE(TRIM(tailor_name), '') IN ('', 'Supervisor A') THEN 0 ELSE 1 END, id ASC
+        WHERE req_number = ?
+          AND status = 'SENT_FOR_ALTERATION'
+          AND COALESCE(handoff_stage, 'PENDING_TAILOR') IN ('PENDING_TAILOR', 'WITH_TAILOR')
+        ORDER BY COALESCE(tailor_assigned, 0) ASC,
+                 CASE WHEN COALESCE(TRIM(tailor_name), '') IN ('', 'Supervisor A') THEN 0 ELSE 1 END,
+                 id ASC
       `).all(cleanReq);
       if (openRows.length === 0) {
-        throw new Error(`No active alteration tickets pending for ${cleanReq}.`);
+        throw httpErr(`No active alteration tickets pending tailor assignment for ${cleanReq}.`, 409);
       }
 
       const totalOpen = openRows.reduce((sum, r) => sum + Number(r.pairs_count || 0), 0);
       const requestedPairs = pairsToAssign == null ? totalOpen : Number(pairsToAssign);
       if (!Number.isInteger(requestedPairs) || requestedPairs <= 0 || requestedPairs > totalOpen) {
-        throw new Error(`Invalid assign quantity ${requestedPairs}: only ${totalOpen} pairs pending for ${cleanReq}.`);
+        throw httpErr(`Invalid assign quantity ${requestedPairs}: only ${totalOpen} pairs pending for ${cleanReq}.`, 400);
       }
 
       let remaining = requestedPairs;
@@ -1493,14 +1567,24 @@ export class PackingService {
         if (remaining <= 0) break;
         const rowPairs = Number(row.pairs_count || 0);
         if (rowPairs <= remaining) {
-          db.prepare(`UPDATE alterations SET tailor_name = ? WHERE id = ?`).run(cleanTailor, row.id);
+          db.prepare(`
+            UPDATE alterations
+            SET tailor_name = ?,
+                tailor_assigned = 1,
+                handoff_stage = 'WITH_TAILOR',
+                assigned_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).run(cleanTailor, row.id);
           remaining -= rowPairs;
           updatedCount += 1;
         } else {
           db.prepare(`UPDATE alterations SET pairs_count = pairs_count - ? WHERE id = ?`).run(remaining, row.id);
           db.prepare(`
-            INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, fault_party, tailor_name, rework_count, is_scrapped, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'SENT_FOR_ALTERATION')
+            INSERT INTO alterations (
+              req_number, source_stage, pairs_count, defect_reason, fault_party,
+              tailor_name, tailor_assigned, assigned_at, rework_count, is_scrapped, handoff_stage, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, ?, 0, 'WITH_TAILOR', 'SENT_FOR_ALTERATION')
           `).run(
             row.req_number,
             row.source_stage,
@@ -1515,36 +1599,246 @@ export class PackingService {
         }
       }
 
-      return { reqNumber: cleanReq, tailorName: cleanTailor, pairsAssigned: requestedPairs, updatedCount };
+      return { reqNumber: cleanReq, tailorName: cleanTailor, pairsAssigned: requestedPairs, handoffStage: 'WITH_TAILOR', updatedCount };
     });
   }
 
-  static completeAlterationRepair(alterationId, tailorName = 'Supervisor A', isScrap = false, deductionRate = 150, pairsToProcess = null) {
+  static receiveAlterationAtInward(alterationId, pairsToProcess = null, tailorName = null, actor = 'Inward Clerk', role = 'INWARD_CLERK') {
     return runAtomicWipStep(() => {
       const alt = db.prepare(`SELECT * FROM alterations WHERE id = ?`).get(alterationId);
-      if (!alt) throw new Error(`Alteration #${alterationId} not found`);
+      if (!alt) throw httpErr(`Alteration #${alterationId} not found`, 404);
 
-      if (alt.status === 'RETURNED_TO_CHECKING') {
-        throw new Error(`Alteration #${alterationId} has already been repaired and returned`);
+      const stage = alt.handoff_stage || (
+        alt.status === 'RETURNED_TO_CHECKING'
+          ? 'REISSUED_TO_PACKING'
+          : (Number(alt.tailor_assigned || 0) ? 'WITH_TAILOR' : 'PENDING_TAILOR')
+      );
+      if (alt.status !== 'SENT_FOR_ALTERATION' || stage !== 'WITH_TAILOR' || !Number(alt.tailor_assigned || 0)) {
+        if (stage === 'PENDING_TAILOR' || !Number(alt.tailor_assigned || 0)) {
+          throw httpErr('Assign a tailor before receiving repaired pairs into Inward Register.', 409);
+        }
+        throw httpErr(`Alteration #${alterationId} cannot be received at Inward from stage ${stage}.`, 409);
       }
 
       const totalAltPairs = Number(alt.pairs_count || 0);
       const requestedPairs = pairsToProcess == null ? totalAltPairs : Number(pairsToProcess);
       if (!Number.isInteger(requestedPairs) || requestedPairs <= 0 || requestedPairs > totalAltPairs) {
-        throw new Error(`Invalid repair quantity ${requestedPairs}: only ${totalAltPairs} pairs pending in Alteration #${alterationId}.`);
+        throw httpErr(`Invalid receive quantity ${requestedPairs}: only ${totalAltPairs} pairs are with tailor in Alteration #${alterationId}.`, 400);
+      }
+
+      const effectiveTailor = String(alt.tailor_name || tailorName || '').trim() || 'Assigned Tailor';
+      const currentReworks = Number(alt.rework_count || 1);
+      if (currentReworks >= 2) {
+        return this.completeAlterationRepair(alterationId, effectiveTailor, true, 150, requestedPairs);
+      }
+
+      const isPartial = requestedPairs < totalAltPairs;
+      let targetAltId = Number(alterationId);
+      if (isPartial) {
+        db.prepare(`UPDATE alterations SET pairs_count = pairs_count - ? WHERE id = ?`).run(requestedPairs, alterationId);
+        const ins = db.prepare(`
+          INSERT INTO alterations (
+            req_number, source_stage, pairs_count, defect_reason, fault_party,
+            tailor_name, tailor_assigned, assigned_at, rework_count, is_scrapped,
+            handoff_stage, inward_received_at, status
+          )
+          VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0, 'RECEIVED_AT_INWARD', CURRENT_TIMESTAMP, 'SENT_FOR_ALTERATION')
+        `).run(
+          alt.req_number,
+          alt.source_stage,
+          requestedPairs,
+          alt.defect_reason,
+          alt.fault_party || 'CONTRACTOR',
+          effectiveTailor,
+          alt.assigned_at || null,
+          currentReworks + 1
+        );
+        targetAltId = Number(ins.lastInsertRowid);
+      } else {
+        db.prepare(`
+          UPDATE alterations
+          SET tailor_name = ?,
+              tailor_assigned = 1,
+              rework_count = rework_count + 1,
+              handoff_stage = 'RECEIVED_AT_INWARD',
+              inward_received_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(effectiveTailor, alterationId);
+      }
+
+      const reqRow = db.prepare(`SELECT order_id FROM glove_requisitions WHERE req_number = ?`).get(alt.req_number);
+      this.recordAuditLog({
+        actor,
+        role,
+        action: 'ALTERATION_INWARD_RECEIVE',
+        entityId: alt.req_number,
+        orderId: reqRow?.order_id || '',
+        beforeSummary: `${alt.req_number} Alteration #${alterationId}: ${requestedPairs} Prs WITH_TAILOR (${effectiveTailor})`,
+        afterSummary: `${alt.req_number} Alteration #${targetAltId}: ${requestedPairs} Prs RECEIVED_AT_INWARD (awaiting Packing Hall REQ)`,
+        reason: 'Repaired pairs received from tailor into Inward Register'
+      });
+
+      return {
+        alterationId: targetAltId,
+        reqNumber: alt.req_number,
+        status: 'RECEIVED_AT_INWARD',
+        handoffStage: 'RECEIVED_AT_INWARD',
+        pairsCount: requestedPairs,
+        tailorName: effectiveTailor,
+        route: 'RECEIVED_AT_INWARD_REGISTER',
+        message: `${requestedPairs} pairs repaired by ${effectiveTailor} received into Inward Register. Request re-issue in Packing Hall to return them to Stage 1.`
+      };
+    });
+  }
+
+  static requestAlterationReissue(reqNumber = null, alterationId = null, actor = 'Packing Supervisor', role = 'PACKING_SUPERVISOR') {
+    return runAtomicWipStep(() => {
+      const rows = (alterationId != null && Number(alterationId) > 0)
+        ? db.prepare(`
+            SELECT * FROM alterations
+            WHERE id = ? AND status = 'SENT_FOR_ALTERATION' AND handoff_stage = 'RECEIVED_AT_INWARD'
+          `).all(Number(alterationId))
+        : db.prepare(`
+            SELECT * FROM alterations
+            WHERE req_number = ? AND status = 'SENT_FOR_ALTERATION' AND handoff_stage = 'RECEIVED_AT_INWARD'
+            ORDER BY id ASC
+          `).all(String(reqNumber || '').trim());
+
+      if (rows.length === 0) {
+        throw httpErr('No repaired pairs are waiting at Inward Register for re-issue.', 409);
+      }
+
+      const targetReq = rows[0].req_number;
+      const totalPairs = rows.reduce((sum, r) => sum + Number(r.pairs_count || 0), 0);
+      const updStmt = db.prepare(`
+        UPDATE alterations
+        SET handoff_stage = 'REISSUE_REQUESTED',
+            reissue_requested_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'SENT_FOR_ALTERATION' AND handoff_stage = 'RECEIVED_AT_INWARD'
+      `);
+      for (const r of rows) {
+        updStmt.run(r.id);
+      }
+
+      const reqRow = db.prepare(`SELECT order_id FROM glove_requisitions WHERE req_number = ?`).get(targetReq);
+      this.recordAuditLog({
+        actor,
+        role,
+        action: 'ALTERATION_REISSUE_REQUEST',
+        entityId: targetReq,
+        orderId: reqRow?.order_id || '',
+        beforeSummary: `${targetReq}: ${totalPairs} Prs RECEIVED_AT_INWARD`,
+        afterSummary: `${targetReq}: ${totalPairs} Prs REISSUE_REQUESTED (queued in Inward Register)`,
+        reason: 'Packing Hall requested re-issue of repaired pairs under original REQ'
+      });
+
+      return {
+        reqNumber: targetReq,
+        alterationIds: rows.map(r => r.id),
+        pairsCount: totalPairs,
+        updatedCount: rows.length,
+        handoffStage: 'REISSUE_REQUESTED',
+        message: `Requested Inward Register re-issue for ${totalPairs} repaired pairs under ${targetReq}.`
+      };
+    });
+  }
+
+  static reissueAlterationToPacking(reqNumber = null, alterationId = null, actor = 'Inward Clerk', role = 'INWARD_CLERK') {
+    return runAtomicWipStep(() => {
+      const rows = (alterationId != null && Number(alterationId) > 0)
+        ? db.prepare(`
+            SELECT * FROM alterations
+            WHERE id = ? AND status = 'SENT_FOR_ALTERATION' AND handoff_stage = 'REISSUE_REQUESTED'
+          `).all(Number(alterationId))
+        : db.prepare(`
+            SELECT * FROM alterations
+            WHERE req_number = ? AND status = 'SENT_FOR_ALTERATION' AND handoff_stage = 'REISSUE_REQUESTED'
+            ORDER BY id ASC
+          `).all(String(reqNumber || '').trim());
+
+      if (rows.length === 0) {
+        throw httpErr('Packing Hall must request rework re-issue before Inward Register can issue repaired pairs.', 409);
+      }
+
+      const targetReq = rows[0].req_number;
+      const totalPairs = rows.reduce((sum, r) => sum + Number(r.pairs_count || 0), 0);
+      const updStmt = db.prepare(`
+        UPDATE alterations
+        SET status = 'RETURNED_TO_CHECKING',
+            handoff_stage = 'REISSUED_TO_PACKING',
+            reissued_at = CURRENT_TIMESTAMP,
+            returned_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'SENT_FOR_ALTERATION' AND handoff_stage = 'REISSUE_REQUESTED'
+      `);
+      for (const r of rows) {
+        updStmt.run(r.id);
+      }
+
+      db.prepare(`
+        UPDATE packing_wip
+        SET step1_checking_in = step1_checking_in + ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE req_number = ?
+      `).run(totalPairs, targetReq);
+
+      const reqRow = db.prepare(`SELECT order_id FROM glove_requisitions WHERE req_number = ?`).get(targetReq);
+      this.recordAuditLog({
+        actor,
+        role,
+        action: 'ALTERATION_REISSUE_TO_PACKING',
+        entityId: targetReq,
+        orderId: reqRow?.order_id || '',
+        beforeSummary: `${targetReq}: ${totalPairs} Prs REISSUE_REQUESTED`,
+        afterSummary: `${targetReq}: ${totalPairs} Prs REISSUED_TO_PACKING (+${totalPairs} Prs to Stage 1 Checking)`,
+        reason: 'Inward Register re-issued repaired pairs to Packing Hall under original REQ'
+      });
+
+      return {
+        reqNumber: targetReq,
+        alterationIds: rows.map(r => r.id),
+        pairsCount: totalPairs,
+        updatedCount: rows.length,
+        handoffStage: 'REISSUED_TO_PACKING',
+        requisition: this.getRequisition(targetReq),
+        message: `Re-issued ${totalPairs} repaired pairs for ${targetReq} from Inward Register to Packing Hall Stage 1.`
+      };
+    });
+  }
+
+  static completeAlterationRepair(alterationId, tailorName = 'Supervisor A', isScrap = false, deductionRate = 150, pairsToProcess = null, options = {}) {
+    if (!isScrap && options?.directToStage1 === false) {
+      return this.receiveAlterationAtInward(alterationId, pairsToProcess, tailorName);
+    }
+
+    return runAtomicWipStep(() => {
+      const alt = db.prepare(`SELECT * FROM alterations WHERE id = ?`).get(alterationId);
+      if (!alt) throw httpErr(`Alteration #${alterationId} not found`, 404);
+
+      const stage = alt.handoff_stage || (alt.status === 'RETURNED_TO_CHECKING' ? 'REISSUED_TO_PACKING' : 'PENDING_TAILOR');
+      if (alt.status === 'RETURNED_TO_CHECKING' || !['PENDING_TAILOR', 'WITH_TAILOR'].includes(stage)) {
+        throw httpErr(`Alteration #${alterationId} cannot be updated from stage ${stage}.`, 409);
+      }
+
+      const totalAltPairs = Number(alt.pairs_count || 0);
+      const requestedPairs = pairsToProcess == null ? totalAltPairs : Number(pairsToProcess);
+      if (!Number.isInteger(requestedPairs) || requestedPairs <= 0 || requestedPairs > totalAltPairs) {
+        throw httpErr(`Invalid repair quantity ${requestedPairs}: only ${totalAltPairs} pairs pending in Alteration #${alterationId}.`, 400);
       }
       const processedPairs = requestedPairs;
       const isPartial = processedPairs < totalAltPairs;
       const currentReworks = Number(alt.rework_count || 1);
-      const effectiveTailor = tailorName || 'Supervisor A';
+      const effectiveTailor = tailorName || alt.tailor_name || 'Supervisor A';
 
       // If marked scrap or exceeded 2 rework attempts -> Auto condemn to scrap
       if (isScrap || currentReworks >= 2) {
         if (isPartial) {
           db.prepare(`UPDATE alterations SET pairs_count = pairs_count - ? WHERE id = ?`).run(processedPairs, alterationId);
           db.prepare(`
-            INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, fault_party, tailor_name, rework_count, is_scrapped, status, returned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'RETURNED_TO_CHECKING', CURRENT_TIMESTAMP)
+            INSERT INTO alterations (
+              req_number, source_stage, pairs_count, defect_reason, fault_party,
+              tailor_name, tailor_assigned, assigned_at, rework_count, is_scrapped, handoff_stage, status, returned_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'SCRAPPED', 'RETURNED_TO_CHECKING', CURRENT_TIMESTAMP)
           `).run(
             alt.req_number,
             alt.source_stage,
@@ -1552,12 +1846,18 @@ export class PackingService {
             alt.defect_reason,
             alt.fault_party || 'CONTRACTOR',
             effectiveTailor,
+            Number(alt.tailor_assigned || 0),
+            alt.assigned_at || null,
             currentReworks
           );
         } else {
           db.prepare(`
             UPDATE alterations
-            SET status = 'RETURNED_TO_CHECKING', tailor_name = ?, is_scrapped = 1, returned_at = CURRENT_TIMESTAMP
+            SET status = 'RETURNED_TO_CHECKING',
+                handoff_stage = 'SCRAPPED',
+                tailor_name = ?,
+                is_scrapped = 1,
+                returned_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `).run(effectiveTailor, alterationId);
         }
@@ -1574,6 +1874,7 @@ export class PackingService {
         return {
           alterationId,
           status: 'CONDEMNED_TO_SCRAP',
+          handoffStage: 'SCRAPPED',
           pairsCount: processedPairs,
           tailorName: effectiveTailor,
           faultParty: alt.fault_party || 'CONTRACTOR',
@@ -1582,12 +1883,16 @@ export class PackingService {
         };
       }
 
-      // Otherwise repaired -> MANDATORY FACTORY RULE: Must return to Step 1 Checking
+      // Legacy direct-JS return helper -> marks REISSUED_TO_PACKING and returns to Step 1 Checking
       if (isPartial) {
         db.prepare(`UPDATE alterations SET pairs_count = pairs_count - ? WHERE id = ?`).run(processedPairs, alterationId);
         db.prepare(`
-          INSERT INTO alterations (req_number, source_stage, pairs_count, defect_reason, fault_party, tailor_name, rework_count, is_scrapped, status, returned_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'RETURNED_TO_CHECKING', CURRENT_TIMESTAMP)
+          INSERT INTO alterations (
+            req_number, source_stage, pairs_count, defect_reason, fault_party,
+            tailor_name, tailor_assigned, assigned_at, rework_count, is_scrapped,
+            handoff_stage, reissued_at, status, returned_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'REISSUED_TO_PACKING', CURRENT_TIMESTAMP, 'RETURNED_TO_CHECKING', CURRENT_TIMESTAMP)
         `).run(
           alt.req_number,
           alt.source_stage,
@@ -1595,12 +1900,19 @@ export class PackingService {
           alt.defect_reason,
           alt.fault_party || 'CONTRACTOR',
           effectiveTailor,
+          Number(alt.tailor_assigned || 0),
+          alt.assigned_at || null,
           currentReworks + 1
         );
       } else {
         db.prepare(`
           UPDATE alterations
-          SET status = 'RETURNED_TO_CHECKING', tailor_name = ?, rework_count = rework_count + 1, returned_at = CURRENT_TIMESTAMP
+          SET status = 'RETURNED_TO_CHECKING',
+              handoff_stage = 'REISSUED_TO_PACKING',
+              reissued_at = CURRENT_TIMESTAMP,
+              tailor_name = ?,
+              rework_count = rework_count + 1,
+              returned_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).run(effectiveTailor, alterationId);
       }
@@ -1616,6 +1928,7 @@ export class PackingService {
       return {
         alterationId,
         status: 'REPAIRED_RETURNED',
+        handoffStage: 'REISSUED_TO_PACKING',
         pairsCount: processedPairs,
         tailorName: effectiveTailor,
         route: 'RETURNED_TO_STAGE_1_CHECKING',

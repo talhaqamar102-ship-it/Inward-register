@@ -987,6 +987,92 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
     }
   });
 
+  test('API: POST /api/store/receivings rejects zero-planned and zero-remaining sizes (400)', async () => {
+    const master = db.prepare(`
+      SELECT c.name AS buyer, p.name AS article
+      FROM customers c JOIN products p ON p.customer_id = c.id
+      LIMIT 1
+    `).get();
+    assert.ok(master);
+
+    let orderId;
+    const rcvNumbers = [];
+    try {
+      const orderResp = await apiFetch(`${baseUrl}/api/admin/pending-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          buyer: master.buyer,
+          maker: 'Hall A',
+          po: `PO-ZERO-${randomUUID().slice(0, 6)}`,
+          article: master.article,
+          sizes: { '7': 30, '8': 0, '9': 0, '10': 0, '11': 0 },
+          totalQty: 30
+        })
+      });
+      assert.equal(orderResp.status, 200);
+      orderId = (await orderResp.json()).data.orderId;
+
+      // Attempting to receive pairs into a 0-planned size ('8') must return 400
+      const zeroPlannedResp = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rcvDate: '24-11-2026',
+          orderId,
+          makerContractor: 'Hall A',
+          receivedFrom: 'Driver Zero',
+          strictInwardEntry: true,
+          rcvdPairs: 5,
+          sizes: [{ sizeCode: '8', orderPairs: 0, rcvdPairs: 5 }]
+        })
+      }, inwardCookie);
+      assert.equal(zeroPlannedResp.status, 400);
+
+      // Receiving full 30 pairs on size '7' succeeds (200)
+      const fullSize7Resp = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rcvDate: '24-11-2026',
+          orderId,
+          makerContractor: 'Hall A',
+          receivedFrom: 'Driver Zero',
+          strictInwardEntry: true,
+          rcvdPairs: 30,
+          sizes: [{ sizeCode: '7', orderPairs: 30, rcvdPairs: 30 }]
+        })
+      }, inwardCookie);
+      assert.equal(fullSize7Resp.status, 200);
+      rcvNumbers.push((await fullSize7Resp.json()).data.rcv_number);
+
+      // Attempting to receive again on size '7' when remaining is 0 must return 400
+      const zeroRemResp = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rcvDate: '24-11-2026',
+          orderId,
+          makerContractor: 'Hall A',
+          receivedFrom: 'Driver Zero',
+          strictInwardEntry: true,
+          rcvdPairs: 5,
+          sizes: [{ sizeCode: '7', orderPairs: 30, rcvdPairs: 5 }]
+        })
+      }, inwardCookie);
+      assert.equal(zeroRemResp.status, 400);
+    } finally {
+      for (const rcv of rcvNumbers) {
+        db.prepare('DELETE FROM receiving_size_breakdowns WHERE rcv_number = ?').run(rcv);
+        db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcv);
+      }
+      if (orderId) {
+        db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(orderId);
+        db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(orderId);
+      }
+    }
+  });
+
   test('API: Multi-contractor split order enforces allocations and tracks per-contractor balances', async () => {
     const master = db.prepare(`
       SELECT c.name AS buyer, p.name AS article
@@ -1216,37 +1302,109 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       }, packingCookie);
       assert.equal(s1Resp.status, 200);
 
-      // Inward Clerk reads /api/alterations (200) and sees the 10-pair pending ticket
+      // Inward Clerk reads /api/alterations (200) and sees the 10-pair unassigned pending ticket
       const altListResp = await apiFetch(`${baseUrl}/api/alterations?reqNo=${encodeURIComponent(reqNumber)}`, {}, inwardCookie);
       assert.equal(altListResp.status, 200);
       const altList = (await altListResp.json()).data;
       const openAlt = altList.find(a => a.req_number === reqNumber && a.status === 'SENT_FOR_ALTERATION');
       assert.ok(openAlt);
       assert.equal(openAlt.pairs_count, 10);
+      assert.equal(openAlt.handoff_stage, 'PENDING_TAILOR');
+      assert.equal(Number(openAlt.tailor_assigned || 0), 0);
 
-      // Inward Clerk returns 4 pairs first (partial repair back to Stage 1)
-      const partialResp = await apiFetch(`${baseUrl}/api/alterations/${openAlt.id}/repair`, {
+      // Direct return to Stage 1 is disabled (409) and receiving before assigning a tailor returns 409
+      const directReturnDeny = await apiFetch(`${baseUrl}/api/alterations/${openAlt.id}/return`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }, inwardCookie);
+      assert.equal(directReturnDeny.status, 409);
+
+      const unassignedReceiveDeny = await apiFetch(`${baseUrl}/api/alterations/${openAlt.id}/receive-inward`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tailorName: 'Tailor Rashid', isScrap: false, pairsCount: 4 })
+        body: JSON.stringify({ pairsCount: 4 })
+      }, inwardCookie);
+      assert.equal(unassignedReceiveDeny.status, 409);
+
+      // 1. Assign tailor in Alteration Bay
+      const assignResp = await apiFetch(`${baseUrl}/api/alterations/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reqNumber, tailorName: 'Tailor Rashid', alterationId: openAlt.id })
+      }, inwardCookie);
+      assert.equal(assignResp.status, 200);
+      assert.equal((await assignResp.json()).data.handoffStage, 'WITH_TAILOR');
+
+      // 2. Receive 4 repaired pairs into Inward Register (must NOT advance Stage 1 yet)
+      const partialResp = await apiFetch(`${baseUrl}/api/alterations/${openAlt.id}/receive-inward`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tailorName: 'Tailor Rashid', pairsCount: 4 })
       }, inwardCookie);
       assert.equal(partialResp.status, 200);
-      assert.equal((await partialResp.json()).data.pairsCount, 4);
+      const partialData = (await partialResp.json()).data;
+      assert.equal(partialData.pairsCount, 4);
+      assert.equal(partialData.handoffStage, 'RECEIVED_AT_INWARD');
 
       let reqAfter = (await (await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}`)).json()).data;
-      assert.equal(reqAfter.wip.step1_checking_in, 54);
+      assert.equal(reqAfter.wip.step1_checking_in, 50, 'Stage 1 input must stay 50 while pairs wait at Inward Register');
       const remainingOpen = reqAfter.alterations.find(a => a.id === openAlt.id);
       assert.equal(remainingOpen.status, 'SENT_FOR_ALTERATION');
+      assert.equal(remainingOpen.handoff_stage, 'WITH_TAILOR');
       assert.equal(remainingOpen.pairs_count, 6);
 
-      // Inward Clerk returns the remaining 6 pairs to Stage 1
-      const finalResp = await apiFetch(`${baseUrl}/api/alterations/${openAlt.id}/repair`, {
+      // Premature Inward re-issue before Packing Hall requests REQ must return 409
+      const prematureReissue = await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}/reissue-rework`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }, inwardCookie);
+      assert.equal(prematureReissue.status, 409);
+
+      // 3. Packing Hall requests re-issue on original REQ (still does NOT advance Stage 1 yet)
+      const requestReissueResp = await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}/request-rework-reissue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }, packingCookie);
+      assert.equal(requestReissueResp.status, 200);
+      assert.equal((await requestReissueResp.json()).data.handoffStage, 'REISSUE_REQUESTED');
+
+      reqAfter = (await (await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}`)).json()).data;
+      assert.equal(reqAfter.wip.step1_checking_in, 50);
+
+      // 4. Inward Clerk re-issues requested pairs to Packing Hall Stage 1
+      const reissueResp1 = await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}/reissue-rework`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }, inwardCookie);
+      assert.equal(reissueResp1.status, 200);
+      const reissueData1 = (await reissueResp1.json()).data;
+      assert.equal(reissueData1.pairsCount, 4);
+      assert.equal(reissueData1.handoffStage, 'REISSUED_TO_PACKING');
+
+      reqAfter = (await (await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}`)).json()).data;
+      assert.equal(reqAfter.wip.step1_checking_in, 54);
+
+      // Complete remaining 6 pairs through Inward -> Packing REQ -> Inward Re-Issue
+      const finalReceive = await apiFetch(`${baseUrl}/api/alterations/${openAlt.id}/receive-inward`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tailorName: 'Tailor Rashid', isScrap: false })
+        body: JSON.stringify({ tailorName: 'Tailor Rashid' })
       }, inwardCookie);
-      assert.equal(finalResp.status, 200);
-      assert.equal((await finalResp.json()).data.pairsCount, 6);
+      assert.equal(finalReceive.status, 200);
+      assert.equal((await finalReceive.json()).data.pairsCount, 6);
+
+      const finalReq = await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}/request-rework-reissue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }, packingCookie);
+      assert.equal(finalReq.status, 200);
+
+      const finalReissue = await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}/reissue-rework`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      }, inwardCookie);
+      assert.equal(finalReissue.status, 200);
+      assert.equal((await finalReissue.json()).data.pairsCount, 6);
 
       reqAfter = (await (await apiFetch(`${baseUrl}/api/requisitions/${encodeURIComponent(reqNumber)}`)).json()).data;
       assert.equal(reqAfter.wip.step1_checking_in, 60);

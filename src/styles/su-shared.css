@@ -37,13 +37,13 @@
 .su-vg .su-vg-val { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--su-text-primary); line-height: 16px; white-space: nowrap; }
 .su-vg .su-vg-pct { font-size: 11px; color: var(--ink-600, #52525B); margin-bottom: 4px; }
 .su-vg .su-vg-bar { display: block; width: 68%; border-radius: 4px 4px 0 0; transition: height 160ms var(--vg-ease), opacity 160ms var(--vg-ease); }
-.su-vg .su-vg-bar--orders   { background: var(--su-req-deep); }
-.su-vg .su-vg-bar--received { background: var(--su-grn-primary); }
-.su-vg .su-vg-bar--dock     { background: var(--su-grn-accent); }
-.su-vg .su-vg-bar--wip      { background: var(--su-req-accent); }
-.su-vg .su-vg-bar--hold     { background: var(--su-mreq-primary); }
+.su-vg .su-vg-bar--orders,
+.su-vg .su-vg-bar--received,
+.su-vg .su-vg-bar--dock,
+.su-vg .su-vg-bar--wip,
+.su-vg .su-vg-bar--hold,
+.su-vg .su-vg-bar--packed { background: var(--ink-300); }
 .su-vg .su-vg-bar--alt      { background: var(--su-areq-primary); }
-.su-vg .su-vg-bar--packed   { background: var(--su-complete-primary); }
 
 .su-vg .su-vg-labels { display: grid; grid-template-columns: repeat(7, minmax(64px, 1fr)); gap: 8px; padding-top: 8px; text-align: center; }
 .su-vg .su-vg-step  { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--ink-600, #52525B); }

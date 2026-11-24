@@ -990,7 +990,7 @@ test('5.1-8.5, 6.6, 9.6, 12.2: Super User 5-view DOM rendering, <150ms Tier-1->T
 
   // View 3: Order & Batch Creation + Phased Rollout Record
   const v3Html = renderSuperUserScreen({ ...baseCtx, activeTab: 'creation' });
-  assert.ok(v3Html.includes('1. Super User Master Order Creation'));
+  assert.ok(v3Html.includes('1. Order creation'));
   assert.ok(v3Html.includes('2. Customer &amp; Buyer Master Registry'));
   assert.ok(v3Html.includes('3. Glove Article &amp; Packaging BOM Master'));
   assert.ok(v3Html.includes('4. Contractors / Makers'));
@@ -1000,9 +1000,9 @@ test('5.1-8.5, 6.6, 9.6, 12.2: Super User 5-view DOM rendering, <150ms Tier-1->T
   assert.match(v3Html, /id="admin-pending-order-maker"[^>]*required aria-required="true"/);
   assert.match(v3Html, /id="admin-pending-order-article"[^>]*required aria-required="true"/);
   assert.ok(v3Html.includes('class="su-required-mark"'));
-  assert.ok(v3Html.includes('Save &amp; Issue Master Order'));
+  assert.ok(v3Html.includes('Save &amp; issue order'));
   assert.ok(v3Html.includes('id="btn-admin-reset-pending-order"'));
-  assert.ok(v3Html.includes('Reset Form'));
+  assert.ok(v3Html.includes('Reset form'));
   assert.ok(v3Html.includes('Phased Rollout Record (Phase A'));
   assert.ok(!v3Html.includes('7. Phased Rollout Record'));
   assert.ok(!v3Html.includes('Checklist 12.2'));
@@ -1836,46 +1836,50 @@ test('Delivery countdown handles NO_DATE, OVERDUE, Due Today, DUE_SOON, ON_TRACK
   assert.equal(computeDeliveryCountdown({ dueDate: '2026-11-10', isCompleted: true, nowIso: '2026-11-16' }).status, 'DELIVERED');
 });
 
-test('Material Requisition and Stage 4 unlock only stage-by-stage after Stage 3 Pair Matching is cleared', () => {
-  // Pending / Stage 1 in progress: Material Requisition locked
+test('Material Requisition unlocks once Stage 3 has matched pairs; pending rework in Stages 1-3 does not lock it', () => {
+  // No pairs have passed Stage 3 yet: Material Requisition locked
   assert.equal(
-    isStage3ClearedForMaterialReq({ stage1In: 100, stage1Passed: 0, stage2In: 0, stage2Passed: 0, stage3In: 0, stage3Passed: 0 }),
+    isStage3ClearedForMaterialReq({ stage1In: 100, stage1Passed: 100, stage2In: 100, stage2Passed: 100, stage3In: 100, stage3Passed: 0 }),
     false
   );
-  // Stage 1 done, Stage 2 still has pending pairs: Material Requisition locked
+  // 1,550 pairs matched while 110 rework pairs are still pending in Stage 1:
+  // matched pairs must be able to proceed (parallel flow)
   assert.equal(
-    isStage3ClearedForMaterialReq({ stage1In: 100, stage1Passed: 100, stage2In: 100, stage2Passed: 60, stage3In: 60, stage3Passed: 60 }),
-    false
+    isStage3ClearedForMaterialReq({
+      stage1In: 1660,
+      stage1Passed: 1550,
+      stage2In: 1550,
+      stage2Passed: 1550,
+      stage3In: 1550,
+      stage3Passed: 1550,
+      stage3Defects: 0
+    }),
+    true
   );
-  // Partial Stage 3 matching (remaining in Stage 3): Material Requisition locked
+  // Rework still pending in Stage 2 / Stage 3 must not lock matched pairs either
   assert.equal(
-    isStage3ClearedForMaterialReq({ stage1In: 100, stage1Passed: 100, stage2In: 100, stage2Passed: 100, stage3In: 100, stage3Passed: 80, stage3Defects: 0 }),
-    false
+    isStage3ClearedForMaterialReq({ stage1In: 1660, stage1Passed: 1660, stage2In: 1660, stage2Passed: 1550, stage3In: 1600, stage3Passed: 1550 }),
+    true
   );
-  // Stage 1, Stage 2, and Stage 3 all cleared with matched pairs > 0: Material Requisition unlocks, Stage 4 stays locked until issued
-  const unlockedForMatReq = {
-    stage1In: 100,
-    stage1Passed: 100,
-    stage2In: 100,
-    stage2Passed: 95,
-    stage2Defects: 5,
-    stage3In: 95,
-    stage3Passed: 95,
-    stage3Defects: 0,
+  assert.equal(
+    isStage3ClearedForMaterialReq({ stage1In: 1660, stage1Passed: 1660, stage2In: 1660, stage2Passed: 1660, stage3In: 1660, stage3Passed: 1550, stage3Defects: 0 }),
+    true
+  );
+
+  // Stage 4 still waits for the Material Requisition to be issued
+  const parallelFlow = {
+    stage1In: 1660,
+    stage1Passed: 1550,
+    stage2In: 1550,
+    stage2Passed: 1550,
+    stage3In: 1550,
+    stage3Passed: 1550,
     mreqStatus: 'Ready'
   };
-  assert.equal(isStage3ClearedForMaterialReq(unlockedForMatReq), true);
-  assert.equal(isMaterialRequisitionIssuedForStage4(unlockedForMatReq), false);
-
-  // Once Material Requisition is issued/printed, Stage 4 unlocks
-  assert.equal(
-    isMaterialRequisitionIssuedForStage4({ ...unlockedForMatReq, mreqStatus: 'ISSUED' }),
-    true
-  );
-  assert.equal(
-    isMaterialRequisitionIssuedForStage4({ ...unlockedForMatReq, mreqStatus: 'Printed' }),
-    true
-  );
+  assert.equal(isStage3ClearedForMaterialReq(parallelFlow), true);
+  assert.equal(isMaterialRequisitionIssuedForStage4(parallelFlow), false);
+  assert.equal(isMaterialRequisitionIssuedForStage4({ ...parallelFlow, mreqStatus: 'ISSUED' }), true);
+  assert.equal(isMaterialRequisitionIssuedForStage4({ ...parallelFlow, mreqStatus: 'Printed' }), true);
 });
 
 test('Slice 2: Dynamic sizing helpers and Buyer -> Article -> Color -> Sizes Order Creation cascade', () => {
@@ -1961,7 +1965,7 @@ test('Slice 2: Dynamic sizing helpers and Buyer -> Article -> Color -> Sizes Ord
   const articleSelectHtml = articleSelectMatch[0];
   assert.ok(articleSelectHtml.includes('G-175102-BK 132 RED'), 'Selected buyer BERIK renders its article');
   assert.ok(!articleSelectHtml.includes('BRISBANE AIR MS TECH GREY/BLACK'), 'Selecting BERIK excludes OXFORD articles from #admin-pending-order-article');
-  assert.ok(cascadeHtml.includes('Scale: IXS MEN, 10 Sizes'), 'Displays active IXS MEN scale header');
+  assert.ok(cascadeHtml.includes('10 sizes'), 'Displays active IXS MEN scale size count');
   assert.ok(cascadeHtml.includes('Catalog colorway: Black,Red,White'), 'Displays combined catalog colorway caption');
   assert.ok(cascadeHtml.includes('data-size="2XS"'), 'Renders 2XS input for IXS MEN');
   assert.ok(cascadeHtml.includes('data-size="5XL"'), 'Renders 5XL input for IXS MEN');
@@ -2512,4 +2516,73 @@ test('Item 6: openStage5BoxingModal does not open when state.currentUser is null
     (globalThis as any).document = prevDocument;
     (globalThis as any).HTMLElement = prevHtmlElement;
   }
+});
+
+test('Live Tracking sorts reqBatches ascending even when input requisitions are descending, matching GRN FIFO allocation', () => {
+  const mkReq = (reqNumber: string, qty: number): OrderWipState => ({
+    reqNumber,
+    parentOrderId: 'ORD-2026-555',
+    article: 'GLV-SORT',
+    po: 'PO-555',
+    maker: 'Hall A',
+    buyer: 'Nordic Safety',
+    plannedQty: qty,
+    issueStatus: 'Issued by Inward Register',
+    sizes: { '7': qty, '8': 0, '9': 0, '10': 0, '11': 0 },
+    stage1In: qty,
+    stage1Passed: qty,
+    stage1Defects: 0,
+    stage2In: qty,
+    stage2Passed: qty,
+    stage2Defects: 0,
+    stage3In: qty,
+    stage3Passed: qty,
+    stage3Defects: 0,
+    mreqNo: getMaterialReqNumber(reqNumber),
+    altReqNo: getAlterationReqNumber(reqNumber),
+    mreqQty: `${qty} Sets`,
+    mreqStatus: 'ISSUED',
+    stage4In: qty,
+    stage4Passed: qty,
+    stage4Pending: 0,
+    stage5Cartons: '0 Cartons (0 Prs)',
+    stage5Pending: '0 Cartons',
+    lineEfficiency: '100%',
+    outputPairs: 0,
+    outputCartons: 0,
+    inAlteration: 0
+  });
+
+  const summary = buildSuperUserOrderRollups({
+    pendingOrders: [{
+      orderId: 'ORD-2026-555',
+      buyer: 'Nordic Safety',
+      maker: 'Hall A',
+      po: 'PO-555',
+      article: 'GLV-SORT',
+      color: 'Black',
+      sizes: { '7': 450, '8': 0, '9': 0, '10': 0, '11': 0 },
+      totalQty: 450
+    }],
+    grnList: [
+      { sr: 1, grnCode: 'RCV-2026-0001', date: '20-11-2026', pendingOrderId: 'ORD-2026-555', maker: 'Hall A', article: 'GLV-SORT', rcvdPairs: 150, sizes: { '7': 150 } },
+      { sr: 2, grnCode: 'RCV-2026-0002', date: '21-11-2026', pendingOrderId: 'ORD-2026-555', maker: 'Hall A', article: 'GLV-SORT', rcvdPairs: 150, sizes: { '7': 150 } },
+      { sr: 3, grnCode: 'RCV-2026-0003', date: '21-11-2026', pendingOrderId: 'ORD-2026-555', maker: 'Hall A', article: 'GLV-SORT', rcvdPairs: 150, sizes: { '7': 150 } }
+    ],
+    // Provide REQs in backend DESC order (0003 -> 0002 -> 0001)
+    requisitions: [
+      mkReq('REQ-2026-0003', 150),
+      mkReq('REQ-2026-0002', 150),
+      mkReq('REQ-2026-0001', 150)
+    ],
+    defectList: []
+  });
+
+  const ord = summary.orderRollups[0];
+  assert.deepEqual(ord.grnBatches.map(g => g.grnCode), ['RCV-2026-0001', 'RCV-2026-0002', 'RCV-2026-0003']);
+  assert.deepEqual(ord.reqBatches.map(r => r.reqNumber), ['REQ-2026-0001', 'REQ-2026-0002', 'REQ-2026-0003']);
+  assert.deepEqual(ord.reqBatches.map(r => r.orderReqSeq), [1, 2, 3]);
+  // FIFO must allocate RCV-2026-0001 to REQ-2026-0001, not REQ-2026-0003
+  assert.deepEqual(ord.reqBatches[0].allocatedFromGrns, [{ grnCode: 'RCV-2026-0001', pairs: 150 }]);
+  assert.deepEqual(ord.grnBatches[0].allocatedToReqs, [{ reqNumber: 'REQ-2026-0001', pairs: 150 }]);
 });

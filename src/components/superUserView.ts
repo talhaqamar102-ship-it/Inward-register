@@ -6,6 +6,7 @@ import { computeQcDispatchMetrics, renderQcDispatchTab } from './superUser/qcDis
 import { renderOrderCreationTab } from './superUser/orderCreationTab';
 import { renderReportsTab } from './superUser/reportsTab';
 import { renderUsersTab } from './superUser/usersTab';
+import { formatCurrentDateDDMMYYYY } from '../utils/requisition/sizingAndCatalog';
 
 export type {
   SuperUserTab,
@@ -71,11 +72,12 @@ export function renderSuperUserScreen(ctx: SuperUserRenderContext): string {
       <!-- Sub-Header Bar -->
       <div class="sub-header-bar">
         <h1 class="sub-header-title">
-          <span>Super User Control Center &mdash; Dashboard, Live Tracking, QC &amp; Dispatch, Order Creation, User Management &amp; Reports</span>
+          <span>Operations</span>
         </h1>
         <div class="sub-header-right">
+          <span class="sub-header-date">${formatCurrentDateDDMMYYYY()}</span>
           <button class="btn-outline" id="btn-admin-refresh" style="padding: 4px 10px; font-size: 12px;">
-            Sync Database
+            Sync data
           </button>
         </div>
       </div>
@@ -84,7 +86,7 @@ export function renderSuperUserScreen(ctx: SuperUserRenderContext): string {
         <div class="admin-workspace-layout ${ctx.adminNavCollapsed ? 'admin-nav-collapsed' : ''}">
           <aside class="admin-sidebar" aria-label="Super User navigation">
             <div class="admin-sidebar-heading">
-              <span class="admin-sidebar-label">Super User</span>
+              <span class="admin-sidebar-label">Index</span>
               <button type="button" class="admin-sidebar-toggle" id="btn-admin-nav-toggle"
                 aria-label="${ctx.adminNavCollapsed ? 'Expand' : 'Collapse'} Super User menu"
                 aria-expanded="${!ctx.adminNavCollapsed}">
@@ -92,6 +94,7 @@ export function renderSuperUserScreen(ctx: SuperUserRenderContext): string {
               </button>
             </div>
             <nav class="admin-subnav-tabs" aria-label="Super User Navigation">
+              <div class="admin-nav-group-label">Production</div>
               <button type="button" class="admin-tab-btn ${ctx.activeTab === 'dashboard' ? 'active' : ''}"
                 aria-label="Dashboard" data-admin-tab="dashboard"${ctx.activeTab === 'dashboard' ? ' aria-current="page"' : ''}${ctx.adminNavCollapsed ? ' title="Dashboard"' : ''}>
                 <span class="admin-tab-heading">
@@ -105,7 +108,7 @@ export function renderSuperUserScreen(ctx: SuperUserRenderContext): string {
                   <span class="admin-tab-icon" aria-hidden="true">${renderAdminNavIcon('tracking')}</span>
                   <span class="admin-tab-label">Live Tracking</span>
                 </span>
-                <span class="admin-tab-count">${s.totalOrders} Orders &bull; ${s.totalGrnCount} GRNs &bull; ${s.totalReqCount} REQs</span>
+                <span class="admin-tab-count">${s.totalGrnCount} ${s.totalGrnCount === 1 ? 'GRN' : 'GRNs'}</span>
               </button>
               <button type="button" class="admin-tab-btn ${ctx.activeTab === 'qc-dispatch' ? 'active' : ''}"
                 aria-label="QC &amp; Dispatch" data-admin-tab="qc-dispatch"${ctx.activeTab === 'qc-dispatch' ? ' aria-current="page"' : ''}${ctx.adminNavCollapsed ? ' title="QC & Dispatch"' : ''}>
@@ -121,15 +124,16 @@ export function renderSuperUserScreen(ctx: SuperUserRenderContext): string {
                   <span class="admin-tab-icon" aria-hidden="true">${renderAdminNavIcon('orders')}</span>
                   <span class="admin-tab-label">Order Creation</span>
                 </span>
-                <span class="admin-tab-count">${ctx.pendingOrders.length}</span>
+                <span class="admin-tab-count">${ctx.pendingOrders.length} pending</span>
               </button>
+              <div class="admin-nav-group-label">Administration</div>
               <button type="button" class="admin-tab-btn ${ctx.activeTab === 'users' ? 'active' : ''}"
                 aria-label="User Management" data-admin-tab="users"${ctx.activeTab === 'users' ? ' aria-current="page"' : ''}${ctx.adminNavCollapsed ? ' title="User Management"' : ''}>
                 <span class="admin-tab-heading">
                   <span class="admin-tab-icon" aria-hidden="true">${renderAdminNavIcon('users')}</span>
                   <span class="admin-tab-label">User Management</span>
                 </span>
-                <span class="admin-tab-count">${(ctx.systemUsers || []).length}</span>
+                <span class="admin-tab-count">${(ctx.systemUsers || []).length} ${(ctx.systemUsers || []).length === 1 ? 'user' : 'users'}</span>
               </button>
               <button type="button" class="admin-tab-btn ${ctx.activeTab === 'reports' ? 'active' : ''}"
                 aria-label="Reports" data-admin-tab="reports"${ctx.activeTab === 'reports' ? ' aria-current="page"' : ''}${ctx.adminNavCollapsed ? ' title="Reports"' : ''}>

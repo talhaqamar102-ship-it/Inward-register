@@ -86,7 +86,16 @@ function getAllowedRoles(req) {
   if (path === '/material-requisitions' && method === 'GET') {
     return ['SUPER_USER', 'PACKING_SUPERVISOR'];
   }
-  if (path === '/alterations' || /^\/alterations\/(?:assign|[^/]+\/(?:return|repair))$/.test(path)) {
+  if (path === '/alterations' && method === 'GET') {
+    return ['SUPER_USER', 'ALTERATION_LEAD', 'INWARD_CLERK', 'PACKING_SUPERVISOR'];
+  }
+  if (/^\/alterations\/[^/]+\/request-reissue$/.test(path) || /^\/requisitions\/[^/]+\/request-rework-reissue$/.test(path)) {
+    return ['SUPER_USER', 'PACKING_SUPERVISOR'];
+  }
+  if (
+    /^\/alterations\/(?:assign|[^/]+\/(?:return|repair|receive-inward|reissue-to-packing))$/.test(path) ||
+    /^\/requisitions\/[^/]+\/reissue-rework$/.test(path)
+  ) {
     return ['SUPER_USER', 'ALTERATION_LEAD', 'INWARD_CLERK'];
   }
   if (path === '/materials/return' || /^\/bom\/[^/]+$/.test(path)) {
@@ -287,10 +296,13 @@ apiRouter.post('/wip/:reqNo/final-inspection', handle((req) => {
   );
 }));
 
-// --- ALTERATION & REPAIR LOOP (ALWAYS RETURNS TO STEP 1) ---
+// --- ALTERATION & REPAIR LOOP (Tailor -> Inward Register -> Packing Hall REQ -> Stage 1) ---
 apiRouter.get('/alterations', handle((req) => PackingService.getAlterations(req.query.reqNo)));
-apiRouter.post('/alterations/:id/return', handle((req) => {
-  return PackingService.returnAlteration(Number(req.params.id));
+apiRouter.post('/alterations/:id/return', handle(() => {
+  throw Object.assign(
+    new Error('Direct return to Stage 1 is disabled. Assign a tailor, receive at Inward Register, then re-issue via Packing Hall REQ.'),
+    { statusCode: 409 }
+  );
 }));
 
 // --- STORE MANAGER INWARD SHIPMENTS / RECEIVINGS ---
@@ -350,8 +362,51 @@ apiRouter.post('/alterations/:id/repair', handle((req) => {
     tailorName,
     Boolean(isScrap),
     deductionRate,
-    pairsCount != null ? Number(pairsCount) : null
+    pairsCount != null ? Number(pairsCount) : null,
+    { directToStage1: false }
   );
+}));
+
+apiRouter.post('/alterations/:id/receive-inward', handle((req) => {
+  const { actor, role } = getActorMeta(req);
+  const { pairsCount, tailorName } = req.body || {};
+  return PackingService.receiveAlterationAtInward(
+    Number(req.params.id),
+    pairsCount != null ? Number(pairsCount) : null,
+    tailorName,
+    actor,
+    role
+  );
+}));
+
+apiRouter.post('/alterations/:id/request-reissue', handle((req) => {
+  const { actor, role } = getActorMeta(req);
+  return PackingService.requestAlterationReissue(
+    req.body?.reqNumber || null,
+    Number(req.params.id),
+    actor,
+    role
+  );
+}));
+
+apiRouter.post('/requisitions/:reqNo/request-rework-reissue', handle((req) => {
+  const { actor, role } = getActorMeta(req);
+  return PackingService.requestAlterationReissue(req.params.reqNo, null, actor, role);
+}));
+
+apiRouter.post('/alterations/:id/reissue-to-packing', handle((req) => {
+  const { actor, role } = getActorMeta(req);
+  return PackingService.reissueAlterationToPacking(
+    req.body?.reqNumber || null,
+    Number(req.params.id),
+    actor,
+    role
+  );
+}));
+
+apiRouter.post('/requisitions/:reqNo/reissue-rework', handle((req) => {
+  const { actor, role } = getActorMeta(req);
+  return PackingService.reissueAlterationToPacking(req.params.reqNo, null, actor, role);
 }));
 
 // --- AQL 1.5 AUDIT & EXPORT MANIFEST ---

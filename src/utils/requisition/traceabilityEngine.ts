@@ -324,7 +324,15 @@ export function buildSuperUserOrderRollups(params: {
     const effectivePlannedQty = ord.shortClosed ? receivedGrnQty : Math.max(plannedQty, receivedGrnQty);
     const contractorBalanceQty = ord.shortClosed ? 0 : Math.max(0, plannedQty - receivedGrnQty);
 
-    const matchingReqs = activeReqs.filter(r => r.parentOrderId === ord.orderId);
+    const matchingReqs = activeReqs
+      .filter(r => r.parentOrderId === ord.orderId)
+      .sort((a, b) =>
+        normalizeBaseReqNumber(a.reqNumber).localeCompare(
+          normalizeBaseReqNumber(b.reqNumber),
+          undefined,
+          { numeric: true, sensitivity: 'base' }
+        )
+      );
 
     // Prepare preliminary REQ objects for GRN -> REQ allocation engine
     const prelimReqs = matchingReqs.map(r => {

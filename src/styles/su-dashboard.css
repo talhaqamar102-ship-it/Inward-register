@@ -28,16 +28,31 @@
 .su-db .su-db-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* ---------- KPI cards: neutral figures, color only when something is wrong ---------- */
-.su-db .admin-kpi-grid .admin-kpi-card { padding: 16px; display: grid; gap: 4px; align-content: start; }
+.su-db .admin-kpi-grid .admin-kpi-card {
+  padding: 0 16px;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border-subtle);
+  border-radius: 0;
+}
+.su-db .admin-kpi-grid .admin-kpi-card:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
 .su-db .admin-kpi-grid .admin-kpi-card .admin-kpi-label { font-size: 13px; line-height: 20px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--su-text-secondary); }
-.su-db .admin-kpi-grid .admin-kpi-card .admin-kpi-value { font-size: 28px; line-height: 32px; font-weight: 600; color: var(--su-text-primary); font-variant-numeric: tabular-nums; }
+.su-db .admin-kpi-grid .admin-kpi-card .admin-kpi-value { font-size: 28px; line-height: 32px; font-weight: 500; color: var(--su-text-primary); font-variant-numeric: tabular-nums; }
 .su-db .admin-kpi-grid .admin-kpi-card .admin-kpi-value small { margin-left: 8px; font-size: 13px; line-height: 20px; font-weight: 400; color: var(--ink-600, #52525B); }
 .su-db .admin-kpi-grid .admin-kpi-card .admin-kpi-value.su-db-neg { color: var(--su-areq-primary); }
 .su-db .admin-kpi-grid .admin-kpi-card .admin-kpi-sub { display: grid; gap: 2px; margin-top: 4px; font-size: 12px; line-height: 16px; color: var(--ink-600, #52525B); font-variant-numeric: tabular-nums; }
 .su-db .admin-kpi-grid .admin-kpi-card .admin-kpi-sub strong { font-weight: 600; color: var(--su-text-primary); }
 
 /* ---------- panels + tables ---------- */
-.su-db .panel-card-title { font-weight: 600; font-size: 14px; }
+.su-db .panel-card-title { font-weight: 500; font-size: 14px; }
+.su-db .panel-card-header { background: transparent; border-bottom-color: var(--border-subtle); }
+.su-db .panel-counter-badge { background: transparent; border: 1px solid var(--border-subtle); color: var(--ink-600); font-weight: 500; }
 .su-db .su-db-scroll { overflow: auto; }
 .su-db .su-db-scroll--short { max-height: 220px; }
 .su-db .su-db-scroll--tall  { max-height: 400px; }

@@ -62,6 +62,14 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('.admin-tab-btn[data-admin-tab="orders"]')).not.toHaveAttribute('title', /.+/);
     await expect(page.locator('.admin-tab-btn[data-admin-tab="dashboard"] .admin-tab-label')).toBeVisible();
 
+    // Navbar: quiet rule-based index, grouped sections, consistent counts, quiet header
+    await expect(page.locator('.sub-header-title')).toHaveText('Operations');
+    await expect(page.locator('.admin-nav-group-label')).toHaveCount(2);
+    await expect(page.locator('.admin-nav-group-label').first()).toHaveText('Production');
+    await expect(page.locator('.admin-nav-group-label').last()).toHaveText('Administration');
+    await expect(page.locator('.admin-tab-btn.active')).toHaveCSS('border-left-color', 'rgb(9, 9, 11)');
+    await expect(page.locator('.admin-tab-btn[data-admin-tab="tracking"] .admin-tab-count')).toHaveText(/\d+ GRNs?/);
+
     const expandedSidebarBox = await sidebar.boundingBox();
     const expandedWorkspaceBox = await workspace.boundingBox();
     expect(expandedSidebarBox).not.toBeNull();
@@ -81,6 +89,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#btn-admin-nav-toggle')).toHaveAttribute('aria-expanded', 'false');
     await expect(page.locator('.admin-tab-btn[data-admin-tab="orders"]')).toHaveAttribute('title', 'Order Creation');
     await expect(page.locator('.admin-tab-btn[data-admin-tab="dashboard"] .admin-tab-label')).toBeHidden();
+    await expect(page.locator('.admin-nav-group-label').first()).toBeHidden();
 
     const collapsedSidebarBox = await sidebar.boundingBox();
     const collapsedWorkspaceBox = await workspace.boundingBox();
@@ -124,7 +133,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     // Check Order Creation sections 1-6, required markers, and Reset Form behavior
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
-    await expect(page.locator('#btn-admin-add-pending-order')).toContainText('Save & Issue Master Order');
+    await expect(page.locator('#btn-admin-add-pending-order')).toContainText('Save & issue order');
     await expect(page.locator('#admin-pending-order-maker')).toHaveAttribute('aria-required', 'true');
     await expect(page.locator('#admin-pending-order-article')).toHaveAttribute('aria-required', 'true');
     await expect(page.locator('#screen-admin, [data-testid="superuser-command-center"]')).not.toContainText('Checklist 12.2');
@@ -889,6 +898,9 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('[data-testid="wip-analytics-dashboard"]')).not.toContainText('A-REQ');
 
     // 3a: Before inward issue & Stage 3, Material Requisition & Stage 4 are locked and Sets = 0
+    await expect(page.locator('[data-testid="wip-rail"]')).toBeVisible();
+    await expect(page.locator('.wip-node')).toHaveCount(5);
+    await expect(page.locator('[data-testid="wip-mreq-gate"]')).not.toHaveClass(/is-ready/);
     await expect(page.locator('#wip-mreq-qty')).toHaveText('0 Sets');
     await expect(page.locator('#btn-wip-generate-mreq-slip')).toBeDisabled();
     await expect(page.locator('#btn-wip-print-mreq-slip')).toBeDisabled();
@@ -935,6 +947,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.click('#btn-wip-step3');
     await page.click('#btn-submit-step3-action');
     await expect(page.locator('#wip-mreq-qty')).toHaveText('100 Sets');
+    await expect(page.locator('[data-testid="wip-mreq-gate"]')).toHaveClass(/is-ready/);
     await expect(page.locator('#btn-wip-generate-mreq-slip')).toBeEnabled();
     await expect(page.locator('#btn-wip-print-mreq-slip')).toBeEnabled();
     await expect(page.locator('#btn-wip-step4')).toBeDisabled();
@@ -965,6 +978,14 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     await authenticateAsSuperUser(page);
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+
+    // Order creation reads as a sheet: no card chrome, plain copy, no duplicated step badges
+    await expect(page.locator('.su-order-hub')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(page.locator('.su-order-hub')).toHaveCSS('border-top-width', '0px');
+    await expect(page.locator('.su-order-hub .panel-card-title')).toContainText('1. Order creation');
+    await expect(page.locator('.su-registry-step-badge')).toHaveCount(0);
+    await expect(page.locator('.su-registries-toolbar')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(page.locator('.su-registries-toolbar-title')).toHaveCSS('text-transform', 'none');
 
     const gridBox = await page.locator('.su-registries-grid').boundingBox();
     expect(gridBox).not.toBeNull();
@@ -1027,7 +1048,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     expect(oxfordArticleOptions.some(t => t.includes('G-175102-BK 132 RED'))).toBe(false);
 
     await page.selectOption('#admin-pending-order-article', 'BRISBANE AIR MS TECH GREY/BLACK');
-    await expect(page.locator('.su-order-matrix-header')).toContainText('Scale: GENRAL, 9 Sizes');
+    await expect(page.locator('.su-order-matrix-header')).toContainText('9 sizes');
     await expect(page.locator('.admin-order-size-val')).toHaveCount(9);
     await expect(page.locator('.admin-order-size-val[data-size="XS"]')).toBeVisible();
     await expect(page.locator('.admin-order-size-val[data-size="5XL"]')).toBeVisible();
@@ -1041,7 +1062,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     await page.selectOption('#admin-pending-order-article', 'G-175102-BK 132 RED');
     await expect(page.locator('#admin-pending-order-color')).toHaveValue('Black,Red,White');
-    await expect(page.locator('.su-order-matrix-header')).toContainText('Scale: IXS MEN, 10 Sizes');
+    await expect(page.locator('.su-order-matrix-header')).toContainText('10 sizes');
     await expect(page.locator('.admin-order-size-val')).toHaveCount(10);
 
     // 3. Enter dynamic IXS MEN quantities + split across 2 contractors -> verify 100% balance
@@ -1139,9 +1160,14 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#grn-article')).toHaveValue('G-175102-BK 132 RED');
     await expect(page.locator('#grn-color')).toHaveValue('Black,Red,White');
     await expect(page.locator('.grn-size-val')).toHaveCount(10);
+    await expect(page.locator('.grn-size-val[data-size="2XS"]')).toBeEnabled();
     await expect(page.locator('.grn-size-val[data-size="2XS"]')).toHaveValue('15');
     await expect(page.locator('.grn-size-val[data-size="XS"]')).toHaveValue('25');
     await expect(page.locator('.grn-size-val[data-size="M"]')).toHaveValue('20');
+    await expect(page.locator('.grn-size-val[data-size="S"]')).toBeDisabled();
+    await expect(page.locator('.grn-size-val[data-size="S"]')).toHaveAttribute('tabindex', '-1');
+    await expect(page.locator('.grn-size-val[data-size="2XL"]')).toBeDisabled();
+    await expect(page.locator('.grn-size-val[data-size="2XL"]')).toHaveAttribute('tabindex', '-1');
     await expect(page.locator('.grn-size-val[data-size="7"]')).toHaveCount(0);
 
     await page.fill('#grn-received-from', 'Tariq Carrier');
@@ -1158,6 +1184,9 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#modal-body')).not.toContainText('7 / S');
     await page.click('#modal-btn-close');
 
+    // After receiving all 60 pairs, remaining for 2XS/XS/M is 0 so those inputs are also disabled
+    await expect(page.locator('.grn-size-val[data-size="2XS"]')).toBeDisabled();
+
     // Store Register table renders dynamic IXS MEN GRN sizes
     await expect(page.locator('table.data-table')).toContainText('IXS MEN');
     await expect(page.locator('table.data-table')).toContainText('2XS:15');
@@ -1169,7 +1198,12 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     await expect(page.locator('#new-req-size-matrix-container')).toContainText('Scale: IXS MEN, 10 Sizes');
     await expect(page.locator('.req-size-val')).toHaveCount(10);
+    await expect(page.locator('.req-size-val[data-size="2XS"]')).toBeEnabled();
     await expect(page.locator('.req-size-val[data-size="2XS"]')).toHaveValue('15');
+    await expect(page.locator('.req-size-val[data-size="S"]')).toBeDisabled();
+    await expect(page.locator('.req-size-val[data-size="S"]')).toHaveAttribute('tabindex', '-1');
+    await expect(page.locator('.req-size-val[data-size="2XL"]')).toBeDisabled();
+    await expect(page.locator('.req-size-val[data-size="2XL"]')).toHaveAttribute('tabindex', '-1');
     await expect(page.locator('#new-req-pairs')).toHaveValue('60');
 
     await Promise.all([
@@ -1272,7 +1306,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     // Verify 1) Receive button label, 3) Live DD-MM-YYYY date in header, and 2) Option B split table renders all contractors together
     await expect(page.locator('#btn-print-grn-slip')).toHaveText('Receive');
-    await expect(page.locator('.system-date-label')).toHaveText(`Date: ${expectedTodayDate}`);
+    await expect(page.locator('.system-date-label')).toHaveText(expectedTodayDate);
     await expect(page.locator('#grn-split-entry-table')).toBeVisible();
     await expect(page.locator('#grn-split-entry-table')).toContainText(m1Val);
     await expect(page.locator('#grn-split-entry-table')).toContainText(m2Val);
@@ -1377,6 +1411,10 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     const orderId = (await createdDeleteBtn.getAttribute('data-order-id'))!;
     await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
     await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+    // Point 2: ordered Size 7 is enabled while 0-planned Size 8 is disabled with tabindex="-1"
+    await expect(page.locator('.grn-size-val[data-size="7"]')).toBeEnabled();
+    await expect(page.locator('.grn-size-val[data-size="8"]')).toBeDisabled();
+    await expect(page.locator('.grn-size-val[data-size="8"]')).toHaveAttribute('tabindex', '-1');
     await page.fill('#grn-received-from', 'Alteration Driver');
     await page.fill('.grn-size-val >> nth=0', '100');
     await page.click('#btn-print-grn-slip');
@@ -1434,8 +1472,11 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#defect-qty')).toHaveValue('10');
     await expect(page.locator('#defect-qty')).toHaveAttribute('max', '10');
     await expect(page.locator('#repair-active-bench-panel')).toContainText('10');
+    await expect(page.locator('#repair-active-bench-panel')).toContainText('Unassigned');
+    // Cannot receive before assigning a tailor
+    await expect(page.locator('#repair-active-bench-panel [data-alt-row-receive]').first()).toBeDisabled();
 
-    // Step 1: Assign 6 pairs to Tailor in SQLite -> appears in In rework panel
+    // Step 1: Assign 6 pairs to Tailor in SQLite -> Khalid's Receive at Inward enables while remaining 4 stay disabled
     await page.fill('#defect-tailor', 'Master Tailor Khalid');
     await page.fill('#defect-qty', '6');
     await Promise.all([
@@ -1445,33 +1486,58 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#repair-active-bench-panel')).toContainText('Master Tailor Khalid');
     await expect(page.locator('#repair-active-bench-panel')).toContainText('6');
     await expect(page.locator('#repair-active-bench-panel')).toContainText('4');
+    await expect(page.locator('#repair-active-bench-panel [data-alt-row-receive][data-alt-tailor="Master Tailor Khalid"]')).toBeEnabled();
+    await expect(page.locator('#repair-active-bench-panel [data-alt-row-receive][data-alt-tailor="Unassigned"]')).toBeDisabled();
+    const assignBg = await page.locator('.rep-assign-cta').evaluate(el => getComputedStyle(el).backgroundColor);
+    expect(['rgb(9, 9, 11)', 'rgb(39, 39, 42)']).toContain(assignBg);
 
-    // Step 2a: Inline partial Return (4) then Scrap remaining (2) on Khalid's 6-pair row
+    // Step 2a: Receive 4 pairs from Khalid into Inward Register, then Scrap remaining 2 pairs
     const khalidQtyInput = page.locator('#repair-active-bench-panel input.rep-row-qty[max="6"]');
     await khalidQtyInput.fill('4');
-    await page.locator('#repair-active-bench-panel [data-alt-row-return][data-alt-tailor="Master Tailor Khalid"]').click();
-    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Returned to stage 1');
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/receive-inward') && res.status() === 200),
+      page.locator('#repair-active-bench-panel [data-alt-row-receive][data-alt-tailor="Master Tailor Khalid"]').click()
+    ]);
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Received at Inward');
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Awaiting Packing Hall REQ');
 
-    await page.locator('#repair-active-bench-panel [data-alt-row-scrap][data-alt-tailor="Master Tailor Khalid"]').click();
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/repair') && res.status() === 200),
+      page.locator('#repair-active-bench-panel [data-alt-row-scrap][data-alt-tailor="Master Tailor Khalid"]').click()
+    ]);
     await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Scrapped');
 
-    // Step 2b: Return remaining 4-pair row to Stage 1 -> Active dropdown clears, History toggle reveals past work across reload
-    await page.locator('#repair-active-bench-panel [data-alt-row-return]').first().click();
+    // Step 2b: Assign remaining 4-pair row to Master Tailor Khalid and receive at Inward -> Alteration Bay bench clears
+    await page.fill('#defect-qty', '4');
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/alterations/assign') && res.status() === 200),
+      page.click('#btn-assign-tailor')
+    ]);
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/receive-inward') && res.status() === 200),
+      page.locator('#repair-active-bench-panel [data-alt-row-receive][data-alt-tailor="Master Tailor Khalid"]').click()
+    ]);
     await expect(page.locator('#btn-inward-nav-repair')).toHaveText('Alteration Bay');
     await expect(page.locator('.rep-req-pill')).toContainText('All active cleared');
 
     await page.click('#btn-repair-toggle-all');
-    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Returned to stage 1');
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Received at Inward');
     await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Scrapped');
 
     await page.reload();
     await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
     await page.click('#btn-inward-nav-repair');
     await page.click('#btn-repair-toggle-all');
-    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Returned to stage 1');
+    await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Received at Inward');
     await expect(page.locator('#repair-completed-ledger-panel')).toContainText('Scrapped');
 
-    // 4. Sign back in as Super User and verify Stage 1 input in Packing Hall increased to 8 (4 + 4 returned; 2 scrapped)
+    // Inward Clerk checks Inward Register Rework Queue: pairs await Packing Hall REQ before re-issue
+    await page.click('#btn-inward-nav-grn');
+    await expect(page.locator('#inw-rework-reissue-queue')).toBeVisible();
+    await expect(page.locator('#inw-rework-reissue-queue')).toContainText('4 repaired pairs');
+    await expect(page.locator('#inw-rework-reissue-queue button:has-text("Awaiting REQ")').first()).toBeDisabled();
+
+    // 4. Sign back in as Super User -> Packing Hall still shows 0 at Stage 1 until Packing Hall requests re-issue
     await page.click('#btn-session-lock');
     await page.fill('#auth-username', TEST_ADMIN.username);
     await page.fill('#auth-password', TEST_ADMIN.password);
@@ -1479,8 +1545,56 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('[data-testid="superuser-command-center"]')).toBeVisible();
     await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
     await page.locator(`#tracking-order-card-${orderId} button[data-su-action="open-req-screen"][data-target-screen="screen-packing"]`).first().click();
+    await expect(page.locator('#wip-stg1-in')).toHaveText('0');
+    await expect(page.locator('#btn-wip-step1')).toBeDisabled();
+    await expect(page.locator('#wip-rework-at-inward')).toHaveText('8');
+
+    // Step 3: Packing Hall requests rework re-issue on original REQ -> still held at Inward until issued
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/request-rework-reissue') && res.status() === 200),
+      page.click('#btn-wip-request-rework-reissue')
+    ]);
+    await expect(page.locator('#wip-rework-requested')).toHaveText('8');
+    await expect(page.locator('#wip-stg1-in')).toHaveText('0');
+
+    // Step 4: Inward Register re-issues requested rework pairs to Packing Hall -> prints monochrome slip -> Stage 1 increases to 8
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+    const reissueBtns = page.locator('#inw-rework-reissue-queue [data-inw-reissue-alt-id]');
+    await expect(reissueBtns.first()).toBeEnabled();
+    while ((await reissueBtns.count()) > 0) {
+      await Promise.all([
+        page.waitForResponse(res => res.url().includes('/reissue-to-packing') && res.status() === 200),
+        reissueBtns.first().click()
+      ]);
+      await expect(page.locator('#global-modal.open')).toBeVisible();
+      await expect(page.locator('#modal-body')).toContainText('REWORK RE-ISSUE SLIP');
+      await page.click('#modal-btn-close');
+    }
+
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.locator(`#tracking-order-card-${orderId} button[data-su-action="open-req-screen"][data-target-screen="screen-packing"]`).first().click();
     await expect(page.locator('#wip-stg1-in')).toHaveText('8');
     await expect(page.locator('#btn-wip-step1')).toBeEnabled();
+
+    // Parallel flow: Stage 3 produces matched pairs while 8 rework pairs are still
+    // pending at Stage 1. Material Requisition must unlock for the matched pairs
+    // instead of waiting for the rework to catch up.
+    await page.click('#btn-wip-step2');
+    await page.click('#btn-submit-step2-action');
+    await expect(page.locator('#wip-stg3-in')).toHaveText('90');
+    await page.click('#btn-wip-step3');
+    await page.click('#btn-submit-step3-action');
+    await expect(page.locator('#wip-stg1-in')).toHaveText('8');
+    await expect(page.locator('#wip-mreq-qty')).toHaveText('90 Sets');
+    await expect(page.locator('#btn-wip-generate-mreq-slip')).toBeEnabled();
+    await expect(page.locator('#btn-wip-print-mreq-slip')).toBeEnabled();
+    await expect(page.locator('#btn-wip-step4')).toBeDisabled();
+    await expect(page.locator('[data-testid="wip-mreq-gate"]')).toHaveClass(/is-ready/);
+    await expect(page.locator('#wip-rework-returned')).toHaveText('8');
+    await expect(page.locator('[data-testid="wip-rework-lane"]')).toContainText('returned to stage 1');
 
     expect(runtimeErrors).toEqual([]);
   });
@@ -1518,6 +1632,29 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     });
     expect(vgCheck.barHeight).toBeGreaterThan(10);
     expect(vgCheck.arrowWidth).toBeLessThanOrEqual(20);
+
+    // Chrome quieted: KPI cards are a ruled band, chart bars are ink except the exception,
+    // and primary actions are ink rather than blue.
+    const kpiStyle = await page.locator('.su-db .admin-kpi-card').first().evaluate(el => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, borderTop: s.borderTopWidth, borderLeft: s.borderLeftWidth };
+    });
+    expect(kpiStyle.bg).toBe('rgba(0, 0, 0, 0)');
+    expect(kpiStyle.borderTop).toBe('0px');
+    expect(kpiStyle.borderLeft).toBe('0px');
+    await expect(page.locator('.su-db [data-testid="su-pulse-cards-grid"]')).toContainText('Alteration and scrap');
+    await expect(page.locator('.su-db [data-testid="su-pulse-cards-grid"]')).not.toContainText(/debit|PKR/i);
+    const bars = await page.evaluate(() => {
+      const pick = (sel: string) => {
+        const el = document.querySelector<HTMLElement>(sel);
+        return el ? getComputedStyle(el).backgroundColor : '';
+      };
+      return { wip: pick('.su-vg .su-vg-bar--wip'), alt: pick('.su-vg .su-vg-bar--alt') };
+    });
+    expect(bars.wip).toBe('rgb(212, 212, 216)');
+    expect(bars.alt).toBe('rgb(220, 38, 38)');
+    const primaryBtn = await page.locator('.superuser-command-center .btn-primary').first().evaluate(el => getComputedStyle(el).backgroundColor);
+    expect(primaryBtn).toBe('rgb(9, 9, 11)');
     const negColor = await page.locator('.su-db td.su-db-neg').first().evaluate(el => getComputedStyle(el).color);
     expect(negColor).toBe('rgb(220, 38, 38)');
     await page.locator('.su-db button.su-db-ref[data-su-action="open-slip"]').first().click();
@@ -1571,18 +1708,19 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#global-modal.open')).toBeVisible();
     await page.click('#modal-btn-close');
 
-    // Verify 4-col -> 2-col stats, 2-col -> 1-col streams, and zero document horizontal overflow at 1440px, 768px, 375px
+    // Verify 4-col -> 2-col stats, stacked 1-col full-width streams, ascending GRN/REQ order, zero badge/action clipping, and zero horizontal overflow at 1440px, 768px, 375px
     for (const vp of [
-      { width: 1440, height: 900, expectStatCols: 4, expectBodyCols: 2 },
+      { width: 1440, height: 900, expectStatCols: 4, expectBodyCols: 1 },
       { width: 768, height: 1024, expectStatCols: 2, expectBodyCols: 1 },
       { width: 375, height: 812, expectStatCols: 2, expectBodyCols: 1 }
     ]) {
       await page.setViewportSize({ width: vp.width, height: vp.height });
       const geom = await page.evaluate(() => {
         const docOverflow = document.documentElement.scrollWidth > document.documentElement.clientWidth;
-        const card = document.querySelector<HTMLElement>('.su-lt .su-order-card.su-lt-card');
-        const stats = document.querySelector<HTMLElement>('.su-lt .su-lt-stats');
-        const body = document.querySelector<HTMLElement>('.su-lt .su-lt-body');
+        const card = document.querySelector<HTMLElement>('#tracking-order-card-ORD-2026-600')
+          || document.querySelector<HTMLElement>('.su-lt .su-order-card.su-lt-card');
+        const stats = card?.querySelector<HTMLElement>('.su-lt-stats');
+        const body = card?.querySelector<HTMLElement>('.su-lt-body');
         if (!card || !stats || !body) throw new Error('Missing .su-lt layout elements');
         const statCols = getComputedStyle(stats).gridTemplateColumns.trim().split(/\s+/).length;
         const bodyCols = getComputedStyle(body).gridTemplateColumns.trim().split(/\s+/).length;
@@ -1598,6 +1736,27 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
               .filter(x => x.right > cw + 1)
               .slice(0, 8)
           : [];
+        const panels = Array.from(card.querySelectorAll<HTMLElement>('.su-lt-panel'));
+        const panelScrolls = panels.map(p => {
+          const wrap = p.querySelector<HTMLElement>('.table-responsive');
+          return wrap ? wrap.scrollWidth - wrap.clientWidth : 0;
+        });
+        const clippedItems: string[] = [];
+        for (const p of panels) {
+          const pRight = p.getBoundingClientRect().right;
+          p.querySelectorAll<HTMLElement>('.su-badge, .su-lt-link').forEach(el => {
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.right > pRight + 1) {
+              clippedItems.push(`${el.textContent?.trim() || el.className}:${Math.round(r.right - pRight)}`);
+            }
+          });
+        }
+        const grnCodes = panels[0]
+          ? Array.from(panels[0].querySelectorAll<HTMLElement>('tbody .su-lt-col-ref .su-lt-ref')).map(el => el.textContent?.trim() || '')
+          : [];
+        const reqCodes = panels[1]
+          ? Array.from(panels[1].querySelectorAll<HTMLElement>('tbody .su-lt-col-ref .su-lt-ref')).map(el => el.textContent?.trim() || '')
+          : [];
         return {
           vp: cw,
           sw,
@@ -1606,13 +1765,23 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
           cardRight: card.getBoundingClientRect().right,
           clientWidth: cw,
           statCols,
-          bodyCols
+          bodyCols,
+          panelScrolls,
+          clippedItems,
+          grnCodes,
+          reqCodes
         };
       });
       expect(geom.docOverflow, `Overflow at ${vp.width}px (scrollWidth=${geom.sw}): ${JSON.stringify(geom.offenders)}`).toBe(false);
       expect(geom.cardRight).toBeLessThanOrEqual(geom.clientWidth + 1);
       expect(geom.statCols).toBe(vp.expectStatCols);
       expect(geom.bodyCols).toBe(vp.expectBodyCols);
+      if (vp.width === 1440) {
+        expect(geom.panelScrolls).toEqual([0, 0]);
+        expect(geom.clippedItems).toEqual([]);
+        expect(geom.grnCodes).toEqual(['GRN-0901', 'GRN-0902', 'GRN-0903']);
+        expect(geom.reqCodes).toEqual(['REQ-0901', 'REQ-0902', 'REQ-0903']);
+      }
     }
 
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -1720,7 +1889,16 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
 
     // Auto-selected Hall C Stitcher QA because it has stitchers; verify Hall A disables #grn-stitcher & blank requires Received From
-    await expect(page.locator('.inw .sub-header-bar')).toBeVisible();
+    // Same orientation as Alteration Bay: in-content header, status pill, cards, split
+    await expect(page.locator('.inw .inw-header')).toBeVisible();
+    await expect(page.locator('.inw .inw-title')).toHaveCSS('font-size', '20px');
+    await expect(page.locator('.inw .inw-title')).toHaveCSS('font-weight', '500');
+    await expect(page.locator('.inw .inw-status-pill')).toBeVisible();
+    await expect(page.locator('.inw .inw-card').first()).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await expect(page.locator('.inw .inw-card').first()).toHaveCSS('border-top-width', '1px');
+    await expect(page.locator('.inw .inw-card-title').first()).toHaveCSS('font-weight', '500');
+    const splitCols = await page.locator('.inw .inw-split').evaluate(el => getComputedStyle(el).gridTemplateColumns.trim().split(/\s+/).length);
+    expect(splitCols).toBe(2);
     await expect(page.locator('#grn-hall')).toHaveValue(hallName);
     await expect(page.locator('#grn-stitcher')).toBeEnabled();
     await expect(page.locator('#grn-stitcher')).toContainText(stitcherA);
@@ -1746,7 +1924,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#grn-balance-total')).toHaveText('80');
     await expect(page.locator('[data-bal-size="7"]')).not.toHaveClass(/is-zero/);
     const receiveBtnBg = await page.locator('#btn-print-grn-slip').evaluate(el => getComputedStyle(el).backgroundColor);
-    expect(receiveBtnBg).toBe('rgb(30, 64, 175)');
+    expect(receiveBtnBg).toBe('rgb(9, 9, 11)');
     const sizeInputStyle = await page.locator('.inw .inw-size-input').first().evaluate(el => {
       const cs = getComputedStyle(el);
       return { maxWidth: cs.maxWidth, appearance: cs.appearance };
@@ -1781,6 +1959,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(grnTable).toContainText(stitcherA);
     await expect(grnTable).toContainText(stitcherB);
     await expect(grnTable).toContainText('Brought by Courier Khalid');
+    await expect(page.locator('.inw .inw-action-link').first()).toHaveCSS('color', 'rgb(24, 24, 27)');
 
     // Verify Inward Register flexible full-width layout, sub-header, & zero overflow across 1600 / 1440 / 768 / 375px
     for (const vp of [
@@ -1938,7 +2117,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.selectOption('.admin-line-maker[data-line-index="1"]', 'Hall B');
     await page.locator('.admin-line-size-val[data-line-index="0"]').first().fill('100');
     await page.locator('.admin-line-size-val[data-line-index="1"]').first().fill('60');
-    await expect(page.locator('#btn-admin-add-pending-order')).toContainText('Save & Issue 2 Sub-Orders');
+    await expect(page.locator('#btn-admin-add-pending-order')).toContainText('Save & issue 2 sub-orders');
 
     const [batchRes] = await Promise.all([
       page.waitForResponse(res => res.url().includes('/api/admin/pending-orders') && res.request().method() === 'POST' && res.status() === 200),

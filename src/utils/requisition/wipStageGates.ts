@@ -35,6 +35,8 @@ export interface OrderWipState {
   altReqNo: string;
   mreqQty: string;
   mreqStatus: string;
+  mreqCoveredPairs?: number;
+  mreqIssuedPairs?: number;
   stage4In: number;
   stage4Passed: number;
   stage4Pending: number;
@@ -151,19 +153,13 @@ export function isStage5ReadyForCartons(wip: Partial<OrderWipState>): boolean {
 }
 
 /**
- * Returns true only when Stage 3 (Pair Matching) has completed matched pairs (> 0)
- * and no pairs remain pending in Stage 1, Stage 2, or Stage 3.
+ * Returns true once Stage 3 (Pair Matching) has produced at least one matched pair.
+ * Pairs still pending in Stage 1-3 — including rework returning from Alteration Bay —
+ * do not lock Material Requisition or Stage 4 for pairs that already matched; those
+ * matched pairs flow in parallel and catch-up pairs are covered by a later M-REQ.
  */
 export function isStage3ClearedForMaterialReq(wip: Partial<OrderWipState>): boolean {
-  const s1In = Math.max(0, Number(wip.stage1In || 0));
-  const s1Rem = Math.max(0, s1In - Math.max(0, Number(wip.stage1Passed || 0)) - Math.max(0, Number(wip.stage1Defects || 0)));
-  const s2In = Math.max(0, Number(wip.stage2In || 0));
-  const s2Rem = Math.max(0, s2In - Math.max(0, Number(wip.stage2Passed || 0)) - Math.max(0, Number(wip.stage2Defects || 0)));
-  const s3In = Math.max(0, Number(wip.stage3In || 0));
-  const s3Passed = Math.max(0, Number(wip.stage3Passed || 0));
-  const s3Defects = Math.max(0, Number(wip.stage3Defects || 0));
-  const s3Rem = Math.max(0, s3In - s3Passed - s3Defects);
-  return s3Passed > 0 && s1Rem === 0 && s2Rem === 0 && s3Rem === 0;
+  return Math.max(0, Number(wip.stage3Passed || 0)) > 0;
 }
 
 /**
