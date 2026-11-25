@@ -53,6 +53,7 @@ export interface AdminOrderArticleLine {
   sizeFormat: string;
   maker: string;
   dueDate: string;
+  splitTargetMode?: 'auto' | 'manual';
   sizes: SizeBreakdown;
   splitRows: Array<{
     maker: string;
@@ -78,6 +79,7 @@ export interface SuperUserRenderContext {
   pendingOrders: PendingOrder[];
   dropdownOptions: {
     makers: string[];
+    externalMakers?: Array<{ id: number; name: string }>;
     customers: string[];
     articles: string[];
     poList: string[];
@@ -119,10 +121,16 @@ export interface SuperUserRenderContext {
     sizes: SizeBreakdown;
     dueDate: string;
   }>;
+  orderSplitTargetMode?: 'auto' | 'manual';
   orderArticleLines?: AdminOrderArticleLine[];
   multiArticlePickerOpen?: boolean;
   multiArticleSearch?: string;
   openRegistryIds?: Record<string, boolean>;
+  activeRegistryTab?: string;
+  expandedOrderSizeChips?: Record<string, boolean>;
+  articleDraftCustomerId?: string;
+  articleColorDraftOptions?: string[];
+  articleColorSelectedPresets?: string[];
   qcDispatchRows?: QcDispatchReqRow[];
   qcDispatchSelectedReq?: string;
   qcDispatchOrderFilter?: string;

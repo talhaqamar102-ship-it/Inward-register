@@ -1,14 +1,17 @@
-import { normalizeBaseReqNumber } from '../utils/requisitionLogic';
+import { normalizeBaseReqNumber, parseProductColorOptions, sumContractorAllocationSizes } from '../utils/requisitionLogic';
 import {
   applyFieldValidationErrors,
   clearFieldValidationError,
   confirmAndRunAdminAction,
+  openModal,
+  closeModal,
   runAdminAction,
   showToast
 } from '../utils/domModalsAndPrint';
 import { renderApp } from '../appContext';
-import { state } from '../state/appState';
+import { state, getOrderSizeCodes } from '../state/appState';
 import { syncBackendData } from '../state/syncService';
+import { openAssignRemainingOrderModal } from '../components/superUser/assignRemainingModal';
 import { attachQcDispatchTabHandlers } from './qcDispatchHandlers';
 import { attachAdminTrackingHandlers, attachAdminUsersHandlers } from './admin/trackingAndUsersHandlers';
 import { attachAdminReportsAndDbHandlers } from './admin/reportsAndDbHandlers';
@@ -59,8 +62,8 @@ export function attachAdminHandlers(): void {
     'admin-pending-order-article',
     'admin-cust-name',
     'admin-prod-name',
-    'admin-prod-stickers',
-    'admin-prod-carton',
+    'admin-carton-stickers',
+    'admin-carton-pairs',
     'admin-user-name',
     'admin-user-username',
     'admin-user-password'
@@ -118,12 +121,35 @@ export function attachAdminHandlers(): void {
         case 'expand-all':
           window.adminSetAllOrdersExpanded(el.dataset.expanded === 'true');
           break;
-        case 'toggle-all-registries': {
-          const isExp = el.dataset.expanded === 'true';
-          for (const key of ['buyers', 'articles', 'makers_pos', 'audit_trail', 'sqlite_wal', 'phased_rollout']) {
-            state.adminOpenRegistries[key] = isExp;
+        case 'toggle-order-size-chips': {
+          const orderId = el.dataset.orderId;
+          if (orderId) {
+            state.adminExpandedOrderSizeChips[orderId] = !state.adminExpandedOrderSizeChips[orderId];
+            renderApp();
+          }
+          break;
+        }
+        case 'create-article-for-buyer': {
+          const buyerId = (el.dataset.buyerId || '').trim();
+          const buyerName = (el.dataset.buyerName || '').trim().toLowerCase();
+          const matchedCust = (state.adminOverview.customers || []).find(
+            (c: any) => (buyerId && c.id === buyerId) || (buyerName && String(c.name || '').trim().toLowerCase() === buyerName)
+          );
+          const resolvedCustomerId = matchedCust?.id || buyerId || state.adminOrderDraft.customerId || '';
+          state.adminActiveRegistryTab = 'articles';
+          if (resolvedCustomerId) {
+            state.adminArticleDraftCustomerId = resolvedCustomerId;
           }
           renderApp();
+          const articlePanel = document.querySelector<HTMLElement>('.su-reg-panel[data-registry-id="articles"]');
+          if (articlePanel) {
+            articlePanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+          const custSelect = document.getElementById('admin-prod-cust') as HTMLSelectElement | null;
+          if (custSelect && resolvedCustomerId) {
+            custSelect.value = resolvedCustomerId;
+          }
+          (document.getElementById('admin-prod-name') as HTMLInputElement | null)?.focus();
           break;
         }
         case 'tracking-page': {
@@ -172,17 +198,110 @@ export function attachAdminHandlers(): void {
           if (orderId) openEditPendingOrderModal(orderId);
           break;
         }
-        case 'remove-dropdown-item': {
-          const listKey = el.dataset.listKey as 'makers' | 'poList' | undefined;
-          const itemVal = el.dataset.itemVal;
-          if (listKey && itemVal !== undefined) void window.adminRemoveDropdownItem(listKey, itemVal, el);
+        case 'assign-remaining-order': {
+          const orderId = el.dataset.orderId;
+          const order = orderId ? state.pendingOrders.find(o => o.orderId === orderId) : undefined;
+          if (!order) break;
+          const sizeCodes = getOrderSizeCodes(order.orderId, order.sizeCodes, order.sizeFormat);
+          openAssignRemainingOrderModal({
+            order,
+            sizeCodes,
+            makers: state.dropdownOptions.makers,
+            halls: state.dropdownOptions.halls,
+            externalMakers: state.dropdownOptions.externalMakers,
+            openModal,
+            closeModal,
+            showToast,
+            onSaved: async (updatedOrders) => {
+              state.pendingOrders = updatedOrders;
+              renderApp();
+              await syncBackendData();
+            }
+          });
+          break;
+        }
+        case 'duplicate-article-colour': {
+          const lineIdx = Number(el.dataset.lineIndex);
+          const baseLine = Number.isInteger(lineIdx) ? state.adminOrderArticleLines[lineIdx] : undefined;
+          if (!baseLine) break;
+          syncAdminOrderDraftFromDom();
+          const refreshedBase = state.adminOrderArticleLines[lineIdx];
+          if (!refreshedBase) break;
+          const prod = (state.adminOverview.products || []).find((p: any) =>
+            refreshedBase.productId ? p.id === refreshedBase.productId : p.name === refreshedBase.article
+          );
+          const colorOptions = parseProductColorOptions(prod);
+          const usedColors = new Set(
+            state.adminOrderArticleLines
+              .filter(l => (refreshedBase.productId ? l.productId === refreshedBase.productId : l.article === refreshedBase.article))
+              .map(l => String(l.color || '').trim().toLowerCase())
+          );
+          const nextColor = colorOptions.find(c => !usedColors.has(c.trim().toLowerCase())) || '';
+          const nextSizes: Record<string, number> = {};
+          for (const k of Object.keys(refreshedBase.sizes || {})) nextSizes[k] = 0;
+          state.adminOrderArticleLines.splice(lineIdx + 1, 0, {
+            lineId: `${refreshedBase.productId || refreshedBase.article}-c${Date.now().toString(36)}`,
+            productId: refreshedBase.productId,
+            article: refreshedBase.article,
+            color: nextColor,
+            sizeFormat: refreshedBase.sizeFormat,
+            maker: state.adminOrderDraft.maker || refreshedBase.maker || '',
+            dueDate: state.adminOrderDraft.dueDate || refreshedBase.dueDate || '',
+            splitTargetMode: 'auto',
+            sizes: nextSizes,
+            splitRows: []
+          });
+          renderApp();
+          break;
+        }
+        case 'delete-maker': {
+          const makerId = Number(el.dataset.makerId);
+          const makerName = el.dataset.makerName || 'Contractor';
+          if (!Number.isInteger(makerId) || makerId <= 0) break;
+          void confirmAndRunAdminAction(
+            `admin:delete-maker:${makerId}`,
+            el,
+            {
+              title: 'Confirm Remove Contractor / Maker',
+              message: `Remove Contractor "${makerName}"?`,
+              detail: `Removes "${makerName}" permanently from the Contractors / Makers registry and future Order dropdowns. Past orders and GRNs keep their recorded labels.`,
+              confirmLabel: 'Remove Contractor',
+              cancelLabel: 'Keep Contractor',
+              tone: 'danger'
+            },
+            async () => {
+              const res = await fetch(`/api/admin/makers/${encodeURIComponent(String(makerId))}`, { method: 'DELETE' });
+              const json = await res.json();
+              if (!res.ok || !json.success) {
+                showToast(json.error || `Unable to remove Contractor "${makerName}".`);
+                return;
+              }
+              if (Array.isArray(json.data?.externalMakers)) {
+                state.dropdownOptions.externalMakers = json.data.externalMakers;
+              }
+              if (Array.isArray(json.data?.makers)) {
+                state.dropdownOptions.makers = json.data.makers;
+              }
+              showToast(`Removed Contractor "${makerName}".`);
+              renderApp();
+              await syncBackendData();
+            }
+          );
           break;
         }
         case 'remove-split-row': {
           const splitIdx = Number(el.dataset.splitIndex);
-          if (Number.isInteger(splitIdx) && state.adminOrderSplitRows.length > 2) {
+          if (Number.isInteger(splitIdx) && state.adminOrderSplitRows.length > 1) {
             syncAdminOrderDraftFromDom();
             state.adminOrderSplitRows.splice(splitIdx, 1);
+            if (state.adminOrderSplitTargetMode === 'auto') {
+              const activeCodes = getOrderSizeCodes(
+                undefined,
+                undefined,
+                state.adminOrderDraft.sizeFormat || 'LEGACY_7_11'
+              );
+              state.adminOrderDraft.sizes = sumContractorAllocationSizes(state.adminOrderSplitRows, activeCodes);
+            }
             renderApp();
           }
           break;

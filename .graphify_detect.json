@@ -1,6 +1,6 @@
 {
-  "total_files": 386,
-  "total_words": 436511,
+  "total_files": 387,
+  "total_words": 455611,
   "files": {
     "code": [
       ".agents/skills/ck/commands/forget.mjs",
@@ -38,6 +38,7 @@
       "src/components/inwardRegisterView.ts",
       "src/components/packingHallView.ts",
       "src/components/repairAndQcViews.ts",
+      "src/components/superUser/assignRemainingModal.ts",
       "src/components/superUser/dashboardTab.ts",
       "src/components/superUser/editOrderModal.ts",
       "src/components/superUser/liveTrackingTab.ts",

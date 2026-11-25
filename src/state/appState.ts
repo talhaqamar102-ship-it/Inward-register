@@ -108,6 +108,7 @@ export const state = {
   defectList: [] as DefectRecord[],
   cartons: [] as CartonRecord[],
   issuedPairsTotal: 0,
+  inwardShowIssuedQueue: false,
 
   // Pending Orders created by Super User & stored in SQLite database (selectable on Inward Slip to auto-fill Maker & Article)
   pendingOrders: [] as PendingOrder[],
@@ -176,6 +177,7 @@ export const state = {
   // Dynamic dropdown options populated from backend SQLite database
   dropdownOptions: {
     makers: [] as string[],
+    externalMakers: [] as Array<{ id: number; name: string }>,
     customers: [] as string[],
     articles: [] as string[],
     poList: [] as string[],
@@ -199,11 +201,17 @@ export const state = {
   adminOpenRegistries: {
     buyers: true,
     articles: true,
+    carton_packing: false,
     makers_pos: false,
     audit_trail: false,
     sqlite_wal: false,
     phased_rollout: false
   } as Record<string, boolean>,
+  adminActiveRegistryTab: 'buyers' as 'buyers' | 'articles' | 'carton_packing' | 'makers_pos' | 'audit_trail' | 'sqlite_wal' | 'phased_rollout',
+  adminExpandedOrderSizeChips: {} as Record<string, boolean>,
+  adminArticleDraftCustomerId: '',
+  adminArticleColorDraftOptions: [] as string[],
+  adminArticleColorSelectedPresets: [] as string[],
   adminOrderDraft: {
     customerId: '',
     buyer: '',
@@ -217,6 +225,7 @@ export const state = {
     sizes: createEmptySizes()
   },
   adminOrderSplitRows: [] as Array<{ maker: string; sizes: SizeBreakdown; dueDate: string }>,
+  adminOrderSplitTargetMode: 'auto' as 'auto' | 'manual',
   adminOrderArticleLines: [] as AdminOrderArticleLine[],
   adminMultiArticlePickerOpen: false,
   adminMultiArticleSearch: '',

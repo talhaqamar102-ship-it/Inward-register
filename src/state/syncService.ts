@@ -1,10 +1,12 @@
 import {
+  calculateSizeTotal,
   computeWipRolledYieldPct,
   createEmptySizes,
   formatBatchSequence,
   formatCurrentDateDDMMYYYY,
   getAlterationReqNumber,
   getMaterialReqNumber,
+  getPackingFloorActiveReqNumbers,
   getStartupRequisitionNumber,
   normalizeBaseReqNumber,
   OrderWipState,
@@ -150,6 +152,20 @@ export function mapServerRequisitionToWip(requisition: any): typeof state.packin
     (sum: number, alt: any) => (alt.status === 'SENT_FOR_ALTERATION' && !alt.is_scrapped ? sum + Number(alt.pairs_count || 0) : sum),
     0
   );
+  const reworkAtInwardPairs = alterations.reduce(
+    (sum: number, alt: any) =>
+      alt.status === 'SENT_FOR_ALTERATION' && !alt.is_scrapped && alt.handoff_stage === 'RECEIVED_AT_INWARD'
+        ? sum + Number(alt.pairs_count || 0)
+        : sum,
+    0
+  );
+  const reworkReissueRequestedPairs = alterations.reduce(
+    (sum: number, alt: any) =>
+      alt.status === 'SENT_FOR_ALTERATION' && !alt.is_scrapped && alt.handoff_stage === 'REISSUE_REQUESTED'
+        ? sum + Number(alt.pairs_count || 0)
+        : sum,
+    0
+  );
   const scrappedPairs = alterations.reduce(
     (sum: number, alt: any) => (alt.is_scrapped ? sum + Number(alt.pairs_count || 0) : sum),
     0
@@ -205,6 +221,8 @@ export function mapServerRequisitionToWip(requisition: any): typeof state.packin
     outputPairs: stage5Pairs,
     outputCartons: stage5Cartons,
     inAlteration,
+    reworkAtInwardPairs,
+    reworkReissueRequestedPairs,
     scrappedPairs,
     finalQcApproved: wip.final_qc_status === 'APPROVED_DISPATCH',
     reqStatus: requisition.status || 'ISSUED',
@@ -236,6 +254,7 @@ export function switchActiveOrder(targetReq: string): void {
 export function applyDropdownsPayload(data: any): void {
   if (!data) return;
   if (Array.isArray(data.makers)) state.dropdownOptions.makers = data.makers;
+  if (Array.isArray(data.externalMakers)) state.dropdownOptions.externalMakers = data.externalMakers;
   if (Array.isArray(data.customers)) state.dropdownOptions.customers = data.customers;
   if (Array.isArray(data.articles)) state.dropdownOptions.articles = data.articles;
   if (Array.isArray(data.poList)) state.dropdownOptions.poList = data.poList;
@@ -285,7 +304,7 @@ export function applyReceivingsPayload(rows: any[]): void {
 }
 
 export function applyAlterationsPayload(rows: any[]): void {
-  if (!Array.isArray(rows) || rows.length === 0) return;
+  if (!Array.isArray(rows)) return;
   state.dropdownOptions.defectBatchIds = Array.from(new Set(rows.map((alt: any) =>
     getAlterationReqNumber(alt.req_number || state.packingWip.selectedBatch)
   )));
@@ -517,12 +536,18 @@ export async function syncBackendData(options: { manual?: boolean; forceCatalog?
           state.issuedPairsTotal = getTotalIssuedPairs();
 
           const selectedReq = normalizeBaseReqNumber(state.packingWip.selectedBatch);
+          const hasExplicitSelection = Boolean(
+            state.packingWip.parentOrderId || Number(state.packingWip.plannedQty || 0) > 0
+          );
+          const activeFloorReqNumbers = getPackingFloorActiveReqNumbers(state.ordersWipMap);
           const startupReqNumber = getStartupRequisitionNumber(
             selectedReq,
             state.packingWip,
-            state.persistedReqNumbers
+            activeFloorReqNumbers
           );
-          const refreshReq = (selectedReq && state.ordersWipMap[selectedReq] ? selectedReq : '') || startupReqNumber;
+          const refreshReq = hasExplicitSelection
+            ? (selectedReq && state.ordersWipMap[selectedReq] ? selectedReq : '')
+            : (startupReqNumber || '');
           if (refreshReq && state.ordersWipMap[refreshReq]) {
             state.packingWip = JSON.parse(JSON.stringify(state.ordersWipMap[refreshReq]));
             state.cartons = Array.isArray((state.ordersWipMap[refreshReq] as any).cartons)
@@ -536,6 +561,20 @@ export async function syncBackendData(options: { manual?: boolean; forceCatalog?
         }
       })());
     }
+
+    syncTasks.push((async () => {
+      try {
+        const stampRes = await fetch('/api/sync/stamp');
+        if (stampRes.ok) {
+          const stampJson = await stampRes.json();
+          if (stampJson?.success && typeof stampJson.data?.stamp === 'string') {
+            lastSyncStamp = stampJson.data.stamp;
+          }
+        }
+      } catch {
+        // Ignore offline stamp fetch
+      }
+    })());
 
     await Promise.all(syncTasks);
 
@@ -562,4 +601,258 @@ export async function syncBackendData(options: { manual?: boolean; forceCatalog?
     state.isManualSync = false;
     renderApp({ preserveInitialSyncDrafts: isInitial });
   }
+}
+
+let lastSyncStamp = '';
+let silentPollTimer: number | null = null;
+let silentPollInFlight = false;
+let visibilityListenerAttached = false;
+
+function getPendingRequisitionSet(): Set<string> {
+  const result = new Set<string>();
+  for (const [reqKey, item] of Object.entries(state.ordersWipMap || {})) {
+    if (!item || (item as any).isVoided) continue;
+    const planned = Number((item as any).plannedQty || calculateSizeTotal((item as any).sizes) || 0);
+    if (planned > 0 && (item as any).issueStatus !== 'Issued by Inward Register') {
+      result.add(normalizeBaseReqNumber(reqKey));
+    }
+  }
+  return result;
+}
+
+function getIssuedRequisitionSet(): Set<string> {
+  const result = new Set<string>();
+  for (const [reqKey, item] of Object.entries(state.ordersWipMap || {})) {
+    if (!item || (item as any).isVoided) continue;
+    if ((item as any).issueStatus === 'Issued by Inward Register') {
+      result.add(normalizeBaseReqNumber(reqKey));
+    }
+  }
+  return result;
+}
+
+/**
+ * Poll `/api/sync/stamp` first and run lightweight delta fetches ONLY when handoff state
+ * actually changed on the server, leaving forms, focus, and modals undisturbed when idle.
+ */
+export async function silentRefreshHandoffs(options: { force?: boolean } = {}): Promise<boolean> {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return false;
+  if (document.hidden) return false;
+  if (state.authMode !== 'ready' || !state.currentUser || !state.hasCompletedInitialSync) return false;
+  if (state.isInitialSyncing || state.isManualSync || silentPollInFlight) return false;
+  if (state.activeScreen !== 'screen-grn' && state.activeScreen !== 'screen-packing') return false;
+  if (document.querySelector('#global-modal.open')) return false;
+
+  const role = state.currentUser.role;
+  const activeScreen = state.activeScreen;
+  silentPollInFlight = true;
+  try {
+    const stampRes = await fetch('/api/sync/stamp');
+    if (!stampRes.ok) return false;
+    const stampJson = await stampRes.json();
+    const nextStamp = stampJson?.success && typeof stampJson.data?.stamp === 'string'
+      ? stampJson.data.stamp
+      : '';
+    if (!nextStamp) return false;
+    if (!options.force && lastSyncStamp && nextStamp === lastSyncStamp) return false;
+    if (!lastSyncStamp && !options.force) {
+      lastSyncStamp = nextStamp;
+      return false;
+    }
+
+    const prevPendingReqs = getPendingRequisitionSet();
+    const prevIssuedReqs = getIssuedReqsSnapshot();
+    const prevUnclaimedDockTotal = (state.pendingOrders || []).reduce(
+      (sum, o) => sum + Number((o as any).unclaimedDockPairs || 0),
+      0
+    );
+    const prevReworkRequestedCount = (state.defectList || []).filter(
+      (d: any) => d.handoffStage === 'REISSUE_REQUESTED' || d.status === 'Re-Issue Requested'
+    ).length;
+
+    const deltaTasks: Array<Promise<void>> = [];
+
+    if (['SUPER_USER', 'INWARD_CLERK', 'PACKING_SUPERVISOR'].includes(role)) {
+      deltaTasks.push((async () => {
+        try {
+          const ordersRes = await fetch('/api/admin/pending-orders');
+          if (ordersRes.ok) {
+            const ordersJson = await ordersRes.json();
+            if (ordersJson?.success && Array.isArray(ordersJson.data)) {
+              state.pendingOrders = ordersJson.data;
+            }
+          }
+        } catch {
+          // Keep existing pendingOrders on transient error
+        }
+      })());
+
+      deltaTasks.push((async () => {
+        try {
+          const reqRes = await fetch('/api/requisitions');
+          if (reqRes.ok) {
+            const reqJson = await reqRes.json();
+            if (reqJson?.success && Array.isArray(reqJson.data)) {
+              const linked = reqJson.data.filter(
+                (r: any) => r.order_id && Number(r.is_voided || 0) === 0
+              );
+              state.persistedReqNumbers = linked.map((r: any) => normalizeBaseReqNumber(r.req_number));
+              const nextMap: Record<string, any> = {};
+              for (const reqItem of linked) {
+                const reqNo = normalizeBaseReqNumber(reqItem.req_number);
+                nextMap[reqNo] = mapServerRequisitionToWip(reqItem);
+              }
+              state.ordersWipMap = nextMap;
+              state.issuedPairsTotal = getTotalIssuedPairs();
+
+              const selectedReq = normalizeBaseReqNumber(state.packingWip.selectedBatch);
+              const curWip = nextMap[selectedReq];
+              if (curWip) {
+                state.packingWip = JSON.parse(JSON.stringify(curWip));
+                state.cartons = Array.isArray((curWip as any).cartons)
+                  ? JSON.parse(JSON.stringify((curWip as any).cartons))
+                  : [];
+                state.qcChecklist.forEach(c => (c.passed = Boolean(state.packingWip.finalQcApproved)));
+              }
+            }
+          }
+        } catch {
+          // Keep existing requisitions on transient error
+        }
+      })());
+    }
+
+    if (['SUPER_USER', 'INWARD_CLERK', 'PACKING_SUPERVISOR', 'ALTERATION_LEAD'].includes(role)) {
+      deltaTasks.push((async () => {
+        try {
+          const altRes = await fetch('/api/alterations');
+          if (altRes.ok) {
+            const altJson = await altRes.json();
+            if (altJson?.success && Array.isArray(altJson.data)) {
+              applyAlterationsPayload(altJson.data);
+            }
+          }
+        } catch {
+          // Ignore transient failure
+        }
+      })());
+    }
+
+    if (activeScreen === 'screen-grn' && (role === 'INWARD_CLERK' || role === 'SUPER_USER')) {
+      deltaTasks.push((async () => {
+        try {
+          const rcvRes = await fetch('/api/store/receivings');
+          if (rcvRes.ok) {
+            const rcvJson = await rcvRes.json();
+            if (rcvJson?.success && Array.isArray(rcvJson.data)) {
+              applyReceivingsPayload(rcvJson.data);
+            }
+          }
+        } catch {
+          // Ignore transient failure
+        }
+      })());
+    }
+
+    await Promise.all(deltaTasks);
+
+    if (state.grnList.length > 0 && state.pendingOrders.length > 0) {
+      state.grnList = state.grnList.map(grn => {
+        const linked = state.pendingOrders.find(o => o.orderId === grn.pendingOrderId);
+        if (!linked) return grn;
+        return {
+          ...grn,
+          sizeFormat: linked.sizeFormat || grn.sizeFormat || 'LEGACY_7_11',
+          sizeCodes: linked.sizeCodes?.length ? linked.sizeCodes : grn.sizeCodes
+        };
+      });
+    }
+
+    const nextPendingReqs = getPendingRequisitionSet();
+    const newPending = Array.from(nextPendingReqs).filter(r => !prevPendingReqs.has(r));
+    if (activeScreen === 'screen-grn' && newPending.length > 0) {
+      const curSelected = normalizeBaseReqNumber(state.packingWip.selectedBatch);
+      const curItem = state.ordersWipMap[curSelected];
+      const curIsPending = Boolean(
+        curItem &&
+        !(curItem as any).isVoided &&
+        (curItem as any).issueStatus !== 'Issued by Inward Register' &&
+        Number((curItem as any).plannedQty || calculateSizeTotal((curItem as any).sizes) || 0) > 0
+      );
+      if (!curIsPending && state.ordersWipMap[newPending[0]]) {
+        state.packingWip = JSON.parse(JSON.stringify(state.ordersWipMap[newPending[0]]));
+      }
+    }
+
+    const nextIssuedReqs = getIssuedRequisitionSet();
+    const newlyIssued = Array.from(nextIssuedReqs).filter(r => !prevIssuedReqs.has(r));
+    const nextUnclaimedDockTotal = (state.pendingOrders || []).reduce(
+      (sum, o) => sum + Number((o as any).unclaimedDockPairs || 0),
+      0
+    );
+    const nextReworkRequestedCount = (state.defectList || []).filter(
+      (d: any) => d.handoffStage === 'REISSUE_REQUESTED' || d.status === 'Re-Issue Requested'
+    ).length;
+
+    lastSyncStamp = nextStamp;
+    if (document.querySelector('#global-modal.open')) return false;
+
+    renderApp({ preserveInitialSyncDrafts: true });
+
+    if (activeScreen === 'screen-grn') {
+      if (newPending.length > 0) {
+        showToast(`New Packing Hall requisition: ${newPending.join(', ')}`);
+      } else if (nextReworkRequestedCount > prevReworkRequestedCount) {
+        showToast('Packing Hall requested rework re-issue.');
+      }
+    } else if (activeScreen === 'screen-packing') {
+      if (newlyIssued.length > 0) {
+        showToast(`Inward Register issued ${newlyIssued.join(', ')} — ready for Stage 1.`);
+      } else if (nextUnclaimedDockTotal > prevUnclaimedDockTotal) {
+        showToast('New stock received at Inward Dock.');
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    silentPollInFlight = false;
+  }
+
+  function getIssuedReqsSnapshot(): Set<string> {
+    return getIssuedRequisitionSet();
+  }
+}
+
+export function startSilentHandoffPolling(): void {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  if (silentPollTimer !== null) {
+    window.clearInterval(silentPollTimer);
+    silentPollTimer = null;
+  }
+  const configuredMs = Number((window as any).__MES_SILENT_POLL_MS);
+  const intervalMs = Number.isFinite(configuredMs) && configuredMs > 0
+    ? Math.max(250, configuredMs)
+    : 15000;
+  silentPollTimer = window.setInterval(() => {
+    void silentRefreshHandoffs();
+  }, intervalMs);
+
+  if (!visibilityListenerAttached) {
+    visibilityListenerAttached = true;
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        void silentRefreshHandoffs();
+      }
+    });
+  }
+}
+
+export function stopSilentHandoffPolling(): void {
+  if (typeof window !== 'undefined' && silentPollTimer !== null) {
+    window.clearInterval(silentPollTimer);
+  }
+  silentPollTimer = null;
+  silentPollInFlight = false;
+  lastSyncStamp = '';
 }

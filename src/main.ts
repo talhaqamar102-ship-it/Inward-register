@@ -42,7 +42,11 @@ import {
   getOrderStockState,
   getCurrentRollupSummary
 } from './state/appState';
-import { syncBackendData } from './state/syncService';
+import {
+  startSilentHandoffPolling,
+  stopSilentHandoffPolling,
+  syncBackendData
+} from './state/syncService';
 import {
   buildQcDispatchRows,
   attachQCHandlers,
@@ -121,6 +125,7 @@ function renderScreenAdmin(): string {
     pendingOrders: state.pendingOrders,
     dropdownOptions: {
       makers: state.dropdownOptions.makers,
+      externalMakers: state.dropdownOptions.externalMakers,
       customers: state.dropdownOptions.customers,
       articles: state.dropdownOptions.articles,
       poList: state.dropdownOptions.poList,
@@ -134,10 +139,16 @@ function renderScreenAdmin(): string {
     rollupSummary,
     orderDraft: state.adminOrderDraft,
     orderSplitRows: state.adminOrderSplitRows,
+    orderSplitTargetMode: state.adminOrderSplitTargetMode,
     orderArticleLines: state.adminOrderArticleLines,
     multiArticlePickerOpen: state.adminMultiArticlePickerOpen,
     multiArticleSearch: state.adminMultiArticleSearch,
     openRegistryIds: state.adminOpenRegistries,
+    activeRegistryTab: state.adminActiveRegistryTab,
+    expandedOrderSizeChips: state.adminExpandedOrderSizeChips,
+    articleDraftCustomerId: state.adminArticleDraftCustomerId,
+    articleColorDraftOptions: state.adminArticleColorDraftOptions,
+    articleColorSelectedPresets: state.adminArticleColorSelectedPresets,
     qcDispatchRows: buildQcDispatchRows(),
     qcDispatchSelectedReq: state.adminQcDispatchSelectedReq,
     qcDispatchOrderFilter: state.adminQcDispatchOrderFilter
@@ -216,7 +227,10 @@ async function initializeAuth(): Promise<void> {
     }
     state.authError = '';
     renderApp();
-    if (state.currentUser) await syncBackendData();
+    if (state.currentUser) {
+      await syncBackendData();
+      startSilentHandoffPolling();
+    }
   } catch (error) {
     state.authMode = 'error';
     state.authError = error instanceof Error ? error.message : 'Unable to connect to the MES server.';
@@ -254,8 +268,9 @@ async function submitAuthForm(form: HTMLFormElement): Promise<void> {
     state.authError = '';
     state.activeScreen = screenForRole(state.currentUser!.role);
     renderApp();
-    showToast(isSetup ? 'Initial Super User account created.' : `Signed in to ${stationName(state.currentUser!.role)}.`);
+    if (isSetup) showToast('Initial Super User account created.');
     await syncBackendData();
+    startSilentHandoffPolling();
   } catch (error) {
     state.authError = error instanceof Error ? error.message : 'Sign in failed.';
     renderApp();
@@ -272,6 +287,7 @@ async function lockCurrentSession(): Promise<void> {
     state.currentUser = null;
     state.authMode = 'login';
     state.authError = '';
+    stopSilentHandoffPolling();
     state.hasCompletedInitialSync = false;
     state.isInitialSyncing = false;
     state.isManualSync = false;

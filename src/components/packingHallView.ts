@@ -4,6 +4,7 @@ import {
   buildRequisitionAnalyticsSeries,
   determineOrderActiveStage,
   getAlterationReqNumber,
+  getPackingFloorActiveReqNumbers,
   isMaterialRequisitionIssuedForStage4,
   isPackingAwaitingFinalQc,
   isStage3ClearedForMaterialReq,
@@ -68,9 +69,7 @@ export interface PackingHallViewParams {
 export function renderPackingHallScreen(params: PackingHallViewParams): string {
   const {
     wip,
-    defaultReqNumber,
     ordersWipMap,
-    persistedReqNumbers,
     pendingOrders,
     defectList,
     cartons,
@@ -91,7 +90,27 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
   const baseReq = normalizeBaseReqNumber(wip.selectedBatch);
   const aReq = getAlterationReqNumber(baseReq);
   const scopedDefects = defectList.filter(d => d.id === aReq || d.id === baseReq);
-  const activeAlts = scopedDefects.filter(d => d.status === 'In Rework' || d.status === 'In Washing' || d.status === 'In Sorting');
+  const inwardReworkByReq = new Map<string, { reqNumber: string; article: string; pairs: number }>();
+  for (const d of defectList) {
+    const isAtInward = (d as any).handoffStage === 'RECEIVED_AT_INWARD' || d.status === 'At Inward';
+    if (!isAtInward) continue;
+    const reqNo = normalizeBaseReqNumber((d as any).reqNumber || d.id);
+    if (!reqNo) continue;
+    const item = ordersWipMap[reqNo];
+    const art = item?.article || (d as any).article || '';
+    const prs = Number((d as any).pairsCount || 0) || parseInt(String(d.qty || '0'), 10) || 0;
+    if (prs <= 0) continue;
+    const existing = inwardReworkByReq.get(reqNo);
+    if (existing) {
+      existing.pairs += prs;
+      if (!existing.article && art) existing.article = art;
+    } else {
+      inwardReworkByReq.set(reqNo, { reqNumber: reqNo, article: art, pairs: prs });
+    }
+  }
+  const inwardReworkReady = Array.from(inwardReworkByReq.values()).sort((a, b) =>
+    a.reqNumber.localeCompare(b.reqNumber, undefined, { numeric: true, sensitivity: 'base' })
+  );
   const awaitingFinalQc = isPackingAwaitingFinalQc(wip);
   const stage5Ready = isStage5ReadyForCartons(wip);
   const awaitingInwardIssue = wip.issueStatus !== 'Issued by Inward Register' && wip.stage1In <= 0;
@@ -128,42 +147,35 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
       <section class="form-card">
         <div class="packing-toolbar-grid">
           <div class="form-group" style="flex: 1.4; min-width: 190px;">
-            <label for="wip-batch-select">Active Requisition / Order #</label>
+            <label for="wip-batch-select">Active Requisition</label>
             <select id="wip-batch-select" class="form-select" style="font-weight: 700;">
               ${(() => {
-                const knownReqs = Array.from(new Set([
-                  baseReq,
-                  defaultReqNumber,
-                  ...Object.keys(ordersWipMap)
-                ]));
-                return knownReqs.map(r => {
+                const activeReqs = getPackingFloorActiveReqNumbers(ordersWipMap, baseReq, wip);
+                const isCurrentViewingHandedOff =
+                  Boolean(wip.parentOrderId || Number(wip.plannedQty || 0) > 0) &&
+                  !activeReqs.includes(baseReq);
+                const handedOffCurrentOption = isCurrentViewingHandedOff
+                  ? `<option value="${escapeHtml(baseReq)}" selected hidden>${escapeHtml(`${baseReq}${wip.article ? ` · ${wip.article}` : ''} (Handed off)`)}</option>`
+                  : '';
+
+                if (activeReqs.length === 0) {
+                  return handedOffCurrentOption +
+                    `<option value="" ${isCurrentViewingHandedOff ? '' : 'selected '}disabled>No active requisitions on floor</option>`;
+                }
+
+                return handedOffCurrentOption + activeReqs.map(r => {
                   const item = ordersWipMap[r] || (r === baseReq ? wip : null);
                   const art = item?.article || (r === baseReq ? wip.article : '');
-                  const stage = item ? determineOrderActiveStage(item) : 'STEP_1';
-                  const isEmptyPlaceholder =
-                    r === defaultReqNumber &&
-                    !persistedReqNumbers.includes(r) &&
-                    !item?.parentOrderId &&
-                    Number(item?.plannedQty || 0) === 0;
-                  const stageLabel = isPackingAwaitingFinalQc(item || {})
-                    ? 'Awaiting Final QC'
-                    : stage === 'STEP_1' ? 'Stage 1 (Checking)'
-                    : stage === 'STEP_2' ? 'Stage 2 (Ironing)'
-                    : stage === 'STEP_3' ? 'Stage 3 (Matching)'
-                    : stage === 'STEP_4' ? 'Stage 4 (1st Pkg)'
-                    : stage === 'STEP_5' ? 'Stage 5 (Cartons)'
-                    : 'Completed';
-                  const label = isEmptyPlaceholder
-                    ? (dockReadyOrders.length > 0
-                        ? 'No active requisition — choose ready dock stock below'
-                        : 'No active requisition — awaiting Inward dock receiving')
-                    : `${r}${art ? ` — ${art}` : ''} [${stageLabel}]`;
+                  const reworkAtInward = Number(item?.reworkAtInwardPairs || 0) || (inwardReworkByReq.get(r)?.pairs || 0);
+                  const reworkRequested = Number(item?.reworkReissueRequestedPairs || 0);
+                  const reworkTag = reworkAtInward > 0
+                    ? ' · Rework at Inward'
+                    : reworkRequested > 0
+                      ? ' · Re-issue requested'
+                      : '';
+                  const label = `${r}${art ? ` · ${art}` : ''}${reworkTag}`;
                   return `<option value="${escapeHtml(r)}" ${r === baseReq ? 'selected' : ''}>${escapeHtml(label)}</option>`;
-                }).join('') + (dockReadyOrders.length > 0
-                  ? `<optgroup label="Dock Stock Ready — create requisition">${dockReadyOrders.map(order =>
-                    `<option value="ORDER:${escapeHtml(order.orderId)}">Load ${escapeHtml(order.orderId)} — ${escapeHtml(order.article)} (${getUnclaimed(order.orderId).toLocaleString()} pairs available)</option>`
-                  ).join('')}</optgroup>`
-                  : '');
+                }).join('');
               })()}
             </select>
           </div>
@@ -194,6 +206,24 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
           </div>
         </div>
       </section>
+
+      ${inwardReworkReady.length > 0 ? `
+      <div class="packing-qc-notice" data-testid="wip-rework-inward-banner" style="margin-bottom: 14px; flex-wrap: wrap;">
+        <div style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
+          <div style="font-size: 12px; font-weight: 700; color: var(--ink-950);">
+            Repaired Alteration Stock Received at Inward Register &mdash; Request Re-Issue to Stage 1
+          </div>
+          ${inwardReworkReady.map(rw => `
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding-top: 6px; border-top: 1px dashed var(--border-subtle);">
+              <span style="font-size: 12.5px; color: var(--ink-800);">
+                <strong>${escapeHtml(rw.reqNumber)}</strong>${rw.article ? ` &middot; ${escapeHtml(rw.article)}` : ''} &mdash; <strong>${rw.pairs.toLocaleString()}</strong> repaired pairs received at Inward
+              </span>
+              <button type="button" class="btn-primary" data-packing-action="request-rework-reissue" data-req-number="${escapeHtml(rw.reqNumber)}">Request re-issue (REQ)</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      ` : ''}
 
       <!-- 5-Stage WIP Floor Process Pipeline -->
       <section>
@@ -282,8 +312,19 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
             <div class="wip-slip-metric"><span>On issued slips</span><strong id="wip-mreq-covered">${(wip.mreqIssuedPairs || 0).toLocaleString()} / ${wip.stage3Passed.toLocaleString()}</strong></div>
             <div class="wip-slip-metric"><span>Article</span><strong>${wip.article || '---'}</strong></div>
             <div class="wip-slip-actions">
-              <button type="button" class="btn-outline wip-slip-btn" id="btn-wip-generate-mreq-slip" ${stage3Cleared ? '' : 'disabled title="Match at least one pair in Stage 3 first."'}>Generate slip</button>
-              <button type="button" class="btn-primary wip-slip-btn" id="btn-wip-print-mreq-slip" ${stage3Cleared ? '' : 'disabled title="Match at least one pair in Stage 3 first."'}>Print slip</button>
+              ${(() => {
+                if (!mreqIssuedForStage4) {
+                  return `<button type="button" class="btn-primary wip-slip-btn" id="btn-wip-generate-mreq-slip"${stage3Cleared ? '' : ' disabled title="Match at least one pair in Stage 3 first."'}>Generate slip</button>`;
+                }
+                const uncoveredMatchedPairs = Math.max(0, Number(wip.stage3Passed || 0) - Number(wip.mreqIssuedPairs || 0));
+                if (uncoveredMatchedPairs > 0) {
+                  return `
+                    <button type="button" class="btn-primary wip-slip-btn" id="btn-wip-generate-mreq-slip">Generate slip (+${uncoveredMatchedPairs.toLocaleString()})</button>
+                    <button type="button" class="btn-outline wip-slip-btn" id="btn-wip-print-mreq-slip">Print slip</button>
+                  `;
+                }
+                return `<button type="button" class="btn-primary wip-slip-btn" id="btn-wip-print-mreq-slip">Print slip</button>`;
+              })()}
             </div>
           </div>
 
@@ -349,11 +390,34 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
         })()}
       </section>
 
-      <!-- Real-Time WIP Analytics Dashboard (Planned Demand vs. Actual Packed Pairs per Active Requisition) -->
+      <!-- Real-Time WIP Analytics Dashboard (Selected Requisition Only in Packing Hall) -->
       ${(() => {
-        const series = buildRequisitionAnalyticsSeries(rollupSummary, baseReq);
+        const hasActiveSelectedReq = Boolean(wip.parentOrderId || Number(wip.plannedQty || 0) > 0);
+        const allSeries = buildRequisitionAnalyticsSeries(rollupSummary, baseReq, true);
+        const matchedSeries = hasActiveSelectedReq ? allSeries.filter(pt => pt.reqNumber === baseReq) : [];
+        const selectedSeries = matchedSeries.length > 0
+          ? matchedSeries
+          : (hasActiveSelectedReq ? [{
+              reqNumber: baseReq,
+              mreqNo: wip.mreqNo,
+              altReqNo: wip.altReqNo,
+              parentOrderId: wip.parentOrderId || 'UNLINKED',
+              article: wip.article || '---',
+              plannedDemandPairs: Math.max(0, Number(wip.plannedQty || 0)),
+              issuedFloorPairs: Math.max(0, Number(wip.stage1In || 0)),
+              stage1To3WipPairs: Math.max(0, Number(wip.stage1In || 0) - Number(wip.stage4Passed || 0)),
+              stage4FirstPackedPairs: Math.max(0, Number(wip.stage4Passed || 0)),
+              actualPackedPairs: Math.max(0, Number(wip.outputPairs || 0)),
+              alterationAndScrapPairs: Math.max(0, Number(wip.inAlteration || 0) + Number((wip as any).scrappedPairs || 0)),
+              unpackedBalancePairs: Math.max(0, Number(wip.plannedQty || 0) - Number(wip.stage4Passed || 0)),
+              packedCompletionPct: Number(wip.plannedQty || 0) > 0 ? Math.min(100, Math.round((Number(wip.outputPairs || 0) / Number(wip.plannedQty || 1)) * 100)) : 0,
+              firstPackedPct: Number(wip.plannedQty || 0) > 0 ? Math.min(100, Math.round((Number(wip.stage4Passed || 0) / Number(wip.plannedQty || 1)) * 100)) : 0,
+              activeStage: determineOrderActiveStage(wip),
+              reqLifecycleStatus: wip.issueStatus,
+              isSelected: true
+            }] : []);
         return renderRequisitionWipAnalyticsChart({
-          series,
+          series: selectedSeries,
           activeWipSizes: wip.sizes,
           activeSizeFormat: (wip as any).sizeFormat,
           activeSizeCodes: (wip as any).sizeCodes,
@@ -365,53 +429,9 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
         });
       })()}
 
-      <!-- Split Enterprise Data Grids -->
-      <section class="two-column-grid">
-        <!-- LEFT: Active Alteration / Rework Loop -->
-        <div class="panel-card">
-          <div class="panel-card-header">
-            <h2 class="panel-card-title" style="margin: 0;">Active Alteration / Repair Loop</h2>
-            <span class="panel-counter-badge">${activeAlts.length} Active</span>
-          </div>
-          <div class="table-responsive">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th scope="col">Requisition #</th>
-                  <th scope="col">Source Stage</th>
-                  <th scope="col">Defect Class</th>
-                  <th scope="col" class="text-right">Qty</th>
-                  <th scope="col">Status</th>
-                  <th scope="col">Route</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${scopedDefects.length === 0 ? `
-                  <tr>
-                    <td colspan="6" class="table-empty-cell">No active alterations in queue for ${baseReq}.</td>
-                  </tr>
-                ` : scopedDefects.slice(0, 5).map(d => `
-                  <tr>
-                    <td><strong>${d.id}</strong></td>
-                    <td>${d.origin}</td>
-                    <td>${d.defectClass}</td>
-                    <td class="text-right font-bold">${d.qty}</td>
-                    <td><span class="status-pill">${d.status}</span></td>
-                    <td style="font-size: 11px; color: var(--ink-600);">${escapeHtml(d.route || 'Tailor -> Inward -> REQ -> Stage 1')}</td>
-                  </tr>
-                `).join('') + (scopedDefects.length > 5 ? `
-                  <tr>
-                    <td colspan="6" class="table-empty-cell" style="padding: 8px 12px; font-size: 11.5px;">
-                      Showing 5 of ${scopedDefects.length} tickets for ${aReq} (+${scopedDefects.length - 5} more in Alteration Bay #2).
-                    </td>
-                  </tr>
-                ` : '')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- RIGHT: Master Shipping Carton Manifest -->
+      ${isSuperUser ? `
+      <!-- Super User Stage 5 Master Shipping Carton Manifest -->
+      <section style="margin-bottom: 14px;">
         <div class="panel-card">
           <div class="panel-card-header">
             <h2 class="panel-card-title" style="margin: 0;">Master Shipping Carton Manifest</h2>
@@ -468,22 +488,26 @@ export function renderPackingHallScreen(params: PackingHallViewParams): string {
           </div>
         </div>
       </section>
+      ` : ''}
 
       <!-- Bottom Enterprise Status Bar -->
       <footer class="portal-footer">
         <div class="footer-stats-left">
           <span>Rolled Yield (RTY): <strong>${escapeHtml(wip.lineEfficiency)}</strong></span>
           <span class="stat-divider">&bull;</span>
+          ${isSuperUser ? `
           <span>Output: <strong>${wip.outputPairs} Pairs / ${wip.outputCartons} Cartons</strong></span>
           <span class="stat-divider">&bull;</span>
           <span>Volume: <strong style="font-variant-numeric: tabular-nums;">${cartons.reduce((s, c) => s + Number(c.cbm ?? 0.084), 0).toFixed(3)} CBM</strong></span>
           <span class="stat-divider">&bull;</span>
           <span>Split: <strong>Air ${cartons.filter(c => c.shippingMode === 'AIR').reduce((s, c) => s + Number(c.pairs || 0), 0)} / Sea ${cartons.filter(c => c.shippingMode === 'SEA').reduce((s, c) => s + Number(c.pairs || 0), 0)} prs</strong></span>
+          ` : `
+          <span>1st Packed (Stage 4): <strong>${wip.stage4Passed.toLocaleString()} / ${wip.plannedQty.toLocaleString()} Pairs</strong></span>
+          `}
         </div>
         <div class="footer-actions-right">
           <button class="btn-outline" id="btn-wip-export-shift">Export Shift Log</button>
-          <button class="btn-outline" id="btn-wip-print-labels">Print Carton Labels</button>
-          ${isSuperUser ? `<button class="btn-primary" id="btn-wip-final-clearance">QC &amp; Dispatch (Super User)</button>` : ''}
+          ${isSuperUser ? `<button class="btn-outline" id="btn-wip-print-labels">Print Carton Labels</button><button class="btn-primary" id="btn-wip-final-clearance">QC &amp; Dispatch (Super User)</button>` : ''}
         </div>
       </footer>
     </main>

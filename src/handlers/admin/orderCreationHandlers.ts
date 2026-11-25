@@ -4,6 +4,8 @@ import {
   createEmptySizes,
   escapeHtml,
   getScaleSizeCodes,
+  parseProductColorOptions,
+  sumContractorAllocationSizes,
   validateContractorAllocations,
   validatePendingOrderInputs
 } from '../../utils/requisitionLogic';
@@ -157,18 +159,37 @@ function updateAdminSplitBalanceDom(): void {
     const rowTotalCell = document.getElementById(`admin-split-row-total-${idx}`);
     if (rowTotalCell) rowTotalCell.textContent = calculateSizeTotal(row.sizes).toLocaleString();
   });
+  const modeNote = document.getElementById('admin-split-mode-note');
+  const activeCodes = getActiveAdminOrderSizeCodes();
+  const check = validateContractorAllocations(state.adminOrderDraft.sizes, state.adminOrderSplitRows, activeCodes, {
+    allowPartial: true
+  });
+  if (modeNote) {
+    modeNote.textContent =
+      state.adminOrderSplitTargetMode === 'auto'
+        ? 'Auto-summed from split rows (or enter top PO sizes to leave an Unassigned pool)'
+        : (check.totalUnassigned > 0
+            ? `Buyer PO target · ${check.totalUnassigned.toLocaleString()} Prs Unassigned`
+            : 'Buyer PO target · 100% assigned');
+  }
   const balanceBar = document.getElementById('admin-split-balance-bar');
   if (balanceBar) {
-    const activeCodes = getActiveAdminOrderSizeCodes();
-    const check = validateContractorAllocations(state.adminOrderDraft.sizes, state.adminOrderSplitRows, activeCodes);
-    balanceBar.className = `su-split-balance-bar ${check.valid ? 'is-balanced' : 'is-unbalanced'}`;
+    const barClass = !check.valid
+      ? 'is-unbalanced'
+      : (check.totalUnassigned === 0 ? 'is-balanced' : 'is-partial');
+    const statusText = !check.valid
+      ? escapeHtml(check.error || 'Adjust contractor quantities to match order totals')
+      : (check.totalUnassigned === 0
+          ? 'Split Matches Order 100% ✓'
+          : `Partial Allocation Ready · ${check.totalUnassigned.toLocaleString()} Prs Unassigned`);
+    balanceBar.className = `su-split-balance-bar ${barClass}`;
     balanceBar.innerHTML = `
       <span>
         Unassigned Balance:
         ${activeCodes.map(sz => `<strong>${escapeHtml(sz)}:${check.unassignedBySize[sz] ?? 0}</strong>`).join(' | ')}
         (<strong>${check.totalUnassigned}</strong> Prs remaining)
       </span>
-      <strong>${check.valid ? 'Split Matches Order 100% ✓' : escapeHtml(check.error || 'Adjust contractor quantities to match order totals')}</strong>
+      <strong>${statusText}</strong>
     `;
   }
 }
@@ -181,17 +202,25 @@ function updateAdminLineSplitBalanceDom(lineIdx: number): void {
     const rowTotalCell = document.getElementById(`admin-line-split-total-${lineIdx}-${sIdx}`);
     if (rowTotalCell) rowTotalCell.textContent = calculateSizeTotal(sRow.sizes).toLocaleString();
   });
+  const check = validateContractorAllocations(line.sizes, line.splitRows, lineCodes, { allowPartial: true });
   const balanceBar = document.getElementById(`admin-line-split-balance-${lineIdx}`);
   if (balanceBar) {
-    const check = validateContractorAllocations(line.sizes, line.splitRows, lineCodes);
-    balanceBar.className = `su-split-balance-bar ${check.valid ? 'is-balanced' : 'is-unbalanced'}`;
+    const barClass = !check.valid
+      ? 'is-unbalanced'
+      : (check.totalUnassigned === 0 ? 'is-balanced' : 'is-partial');
+    const statusText = !check.valid
+      ? escapeHtml(check.error || 'Adjust contractor quantities to match sub-order totals')
+      : (check.totalUnassigned === 0
+          ? 'Split Matches Sub-order 100% ✓'
+          : `Partial Allocation Ready · ${check.totalUnassigned.toLocaleString()} Prs Unassigned`);
+    balanceBar.className = `su-split-balance-bar ${barClass}`;
     balanceBar.innerHTML = `
       <span>
         Unassigned Balance:
         ${lineCodes.map(sz => `<strong>${escapeHtml(sz)}:${check.unassignedBySize[sz] ?? 0}</strong>`).join(' | ')}
         (<strong>${check.totalUnassigned}</strong> Prs remaining)
       </span>
-      <strong>${check.valid ? 'Split Matches Sub-order 100% ✓' : escapeHtml(check.error || 'Adjust contractor quantities to match sub-order totals')}</strong>
+      <strong>${statusText}</strong>
     `;
   }
 }
@@ -212,9 +241,19 @@ function updateAdminMultiTotalDom(lineIdx?: number): void {
   }
 }
 
+function syncSizeInputHighlight(inp: HTMLInputElement | null | undefined): void {
+  if (!inp) return;
+  const val = parseInt(inp.value || '0', 10) || 0;
+  inp.classList.toggle('is-filled', val > 0);
+}
+
 // Recalculate planned order size total in Super User form
 function recalcAdminOrderSizes(): void {
   syncAdminOrderDraftFromDom();
+  if (state.adminOrderSplitRows.length > 0) {
+    state.adminOrderSplitTargetMode = calculateSizeTotal(state.adminOrderDraft.sizes) > 0 ? 'manual' : 'auto';
+  }
+  document.querySelectorAll<HTMLInputElement>('.admin-order-size-val').forEach(syncSizeInputHighlight);
   const tot = calculateSizeTotal(state.adminOrderDraft.sizes);
   const cell = document.getElementById('admin-order-size-total');
   if (cell) cell.textContent = tot.toLocaleString();
@@ -241,6 +280,10 @@ export function attachAdminOrderCreationHandlers(): void {
     state.adminOrderDraft.sizeFormat = 'LEGACY_7_11';
     state.adminOrderArticleLines = [];
     state.adminMultiArticleSearch = '';
+    if (state.adminOrderDraft.customerId) {
+      state.adminArticleDraftCustomerId = state.adminOrderDraft.customerId;
+    }
+    state.adminMultiArticlePickerOpen = false;
     if (prevFormat !== 'LEGACY_7_11') {
       const legacyCodes = getScaleSizeCodes(state.adminOverview.sizeStandards, 'LEGACY_7_11');
       state.adminOrderDraft.sizes = createEmptySizes(legacyCodes);
@@ -263,6 +306,13 @@ export function attachAdminOrderCreationHandlers(): void {
     const optCustomerName = opt?.getAttribute('data-customer-name') || '';
     const nextFormat = articleEl?.value ? (opt?.getAttribute('data-size-format') || 'LEGACY_7_11') : 'LEGACY_7_11';
     const optColorSpec = opt?.getAttribute('data-color-spec') || '';
+    let optColorOptions: string[] = [];
+    try {
+      const parsed = JSON.parse(opt?.getAttribute('data-color-options') || '[]');
+      if (Array.isArray(parsed)) optColorOptions = parsed.map(c => String(c || '').trim()).filter(Boolean);
+    } catch {
+      optColorOptions = [];
+    }
 
     state.adminOrderDraft.productId = optProductId;
     state.adminOrderDraft.article = articleEl?.value?.trim() || '';
@@ -270,7 +320,7 @@ export function attachAdminOrderCreationHandlers(): void {
       state.adminOrderDraft.buyer = optCustomerName;
       state.adminOrderDraft.customerId = optCustomerId;
     }
-    state.adminOrderDraft.color = optColorSpec;
+    state.adminOrderDraft.color = optColorOptions[0] || optColorSpec;
     state.adminOrderDraft.sizeFormat = nextFormat;
     if (nextFormat !== prevFormat) {
       const nextCodes = getScaleSizeCodes(state.adminOverview.sizeStandards, nextFormat);
@@ -331,6 +381,96 @@ export function attachAdminOrderCreationHandlers(): void {
     document.getElementById(fieldId)?.addEventListener('change', syncAdminOrderDraftFromDom);
   }
 
+  document.getElementById('admin-pending-order-color')?.addEventListener('input', (ev) => {
+    const val = (ev.currentTarget as HTMLInputElement).value.trim();
+    state.adminOrderDraft.color = val;
+    document.querySelectorAll<HTMLButtonElement>('.su-color-choice-btn[data-order-color-choice]').forEach(btn => {
+      const opt = (btn.getAttribute('data-order-color-choice') || '').trim();
+      btn.classList.toggle('is-active', Boolean(val) && opt.toLowerCase() === val.toLowerCase());
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('.su-color-choice-btn[data-order-color-choice]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const choice = (btn.getAttribute('data-order-color-choice') || '').trim();
+      state.adminOrderDraft.color = choice;
+      const colorInput = document.getElementById('admin-pending-order-color') as HTMLInputElement | null;
+      if (colorInput) colorInput.value = choice;
+      document.querySelectorAll<HTMLButtonElement>('.su-color-choice-btn[data-order-color-choice]').forEach(b => {
+        b.classList.toggle('is-active', (b.getAttribute('data-order-color-choice') || '').trim().toLowerCase() === choice.toLowerCase());
+      });
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('.admin-line-color-choice-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.getAttribute('data-line-index'));
+      const choice = (btn.getAttribute('data-line-color-choice') || '').trim();
+      const line = state.adminOrderArticleLines[idx];
+      if (!line) return;
+      line.color = choice;
+      const inp = document.querySelector<HTMLInputElement>(`.admin-line-color[data-line-index="${idx}"]`);
+      if (inp) inp.value = choice;
+      document.querySelectorAll<HTMLButtonElement>(`.admin-line-color-choice-btn[data-line-index="${idx}"]`).forEach(b => {
+        b.classList.toggle('is-active', (b.getAttribute('data-line-color-choice') || '').trim().toLowerCase() === choice.toLowerCase());
+      });
+    });
+  });
+
+  document.getElementById('btn-admin-add-another-colour')?.addEventListener('click', () => {
+    syncAdminOrderDraftFromDom();
+    const article = state.adminOrderDraft.article;
+    if (!article) {
+      showToast('Select an Article first before adding another colour.');
+      return;
+    }
+    const fmt = state.adminOrderDraft.sizeFormat || 'LEGACY_7_11';
+    const codes = getScaleSizeCodes(state.adminOverview.sizeStandards, fmt);
+    const prod = (state.adminOverview.products || []).find((p: any) =>
+      state.adminOrderDraft.productId ? p.id === state.adminOrderDraft.productId : p.name === article
+    );
+    const colorOptions = parseProductColorOptions(prod);
+    const firstColor = (state.adminOrderDraft.color || '').trim();
+    const secondColor = colorOptions.find(c => c.trim().toLowerCase() !== firstColor.toLowerCase()) || '';
+
+    state.adminOrderLastDefaultMaker = state.adminOrderDraft.maker;
+    state.adminOrderLastDefaultDueDate = state.adminOrderDraft.dueDate;
+    state.adminOrderArticleLines = [
+      {
+        lineId: state.adminOrderDraft.productId || article,
+        productId: state.adminOrderDraft.productId || '',
+        article,
+        color: firstColor,
+        sizeFormat: fmt,
+        maker: state.adminOrderDraft.maker || '',
+        dueDate: state.adminOrderDraft.dueDate || '',
+        splitTargetMode: state.adminOrderSplitRows.length > 0 ? state.adminOrderSplitTargetMode : 'auto',
+        sizes: { ...state.adminOrderDraft.sizes },
+        splitRows: state.adminOrderSplitRows.map(r => ({
+          maker: r.maker,
+          sizes: { ...r.sizes },
+          dueDate: r.dueDate
+        }))
+      },
+      {
+        lineId: `${state.adminOrderDraft.productId || article}-c${Date.now().toString(36)}`,
+        productId: state.adminOrderDraft.productId || '',
+        article,
+        color: secondColor,
+        sizeFormat: fmt,
+        maker: state.adminOrderDraft.maker || '',
+        dueDate: state.adminOrderDraft.dueDate || '',
+        splitTargetMode: 'auto',
+        sizes: createEmptySizes(codes),
+        splitRows: []
+      }
+    ];
+    state.adminOrderSplitRows = [];
+    state.adminOrderSplitTargetMode = 'auto';
+    state.adminMultiArticlePickerOpen = false;
+    renderApp();
+  });
+
   // --- Section: Multi-Article Picker & Sub-Order Lines ---
   document.getElementById('btn-admin-toggle-multi-articles')?.addEventListener('click', () => {
     syncAdminOrderDraftFromDom();
@@ -348,6 +488,7 @@ export function attachAdminOrderCreationHandlers(): void {
         sizeFormat: fmt,
         maker: state.adminOrderDraft.maker || '',
         dueDate: state.adminOrderDraft.dueDate || '',
+        splitTargetMode: state.adminOrderSplitRows.length > 0 ? state.adminOrderSplitTargetMode : 'auto',
         sizes: { ...state.adminOrderDraft.sizes },
         splitRows: state.adminOrderSplitRows.map(r => ({
           maker: r.maker,
@@ -356,6 +497,7 @@ export function attachAdminOrderCreationHandlers(): void {
         }))
       });
       state.adminOrderSplitRows = [];
+      state.adminOrderSplitTargetMode = 'auto';
     }
     renderApp();
   });
@@ -390,6 +532,7 @@ export function attachAdminOrderCreationHandlers(): void {
             sizeFormat,
             maker: state.adminOrderDraft.maker || '',
             dueDate: state.adminOrderDraft.dueDate || '',
+            splitTargetMode: 'auto',
             sizes: createEmptySizes(lineCodes),
             splitRows: []
           });
@@ -435,11 +578,15 @@ export function attachAdminOrderCreationHandlers(): void {
 
   document.querySelectorAll<HTMLInputElement>('.admin-line-size-val').forEach(inp => {
     inp.addEventListener('input', () => {
+      syncSizeInputHighlight(inp);
       const idx = Number(inp.getAttribute('data-line-index'));
       const sz = inp.getAttribute('data-size') || '';
       const line = state.adminOrderArticleLines[idx];
       if (line && sz) {
         line.sizes[sz] = Math.max(0, parseInt(inp.value || '0', 10) || 0);
+        if (line.splitRows.length > 0) {
+          line.splitTargetMode = calculateSizeTotal(line.sizes) > 0 ? 'manual' : 'auto';
+        }
         updateAdminMultiTotalDom(idx);
       }
     });
@@ -454,7 +601,9 @@ export function attachAdminOrderCreationHandlers(): void {
       const lineCodes = getScaleSizeCodes(state.adminOverview.sizeStandards, line.sizeFormat || 'LEGACY_7_11');
       if (line.splitRows.length > 0) {
         line.splitRows = [];
+        line.splitTargetMode = 'auto';
       } else {
+        line.splitTargetMode = calculateSizeTotal(line.sizes) > 0 ? 'manual' : 'auto';
         const firstMaker = line.maker || state.adminOrderDraft.maker || state.dropdownOptions.makers[0] || '';
         const secondMaker = state.dropdownOptions.makers.find(m => m !== firstMaker) || '';
         line.splitRows = [
@@ -490,8 +639,12 @@ export function attachAdminOrderCreationHandlers(): void {
       const idx = Number(btn.getAttribute('data-line-index'));
       const sIdx = Number(btn.getAttribute('data-split-index'));
       const line = state.adminOrderArticleLines[idx];
-      if (line && Number.isInteger(sIdx) && line.splitRows.length > 2) {
+      if (line && Number.isInteger(sIdx) && line.splitRows.length > 1) {
         line.splitRows.splice(sIdx, 1);
+        if ((line.splitTargetMode || 'auto') === 'auto') {
+          const lineCodes = getScaleSizeCodes(state.adminOverview.sizeStandards, line.sizeFormat || 'LEGACY_7_11');
+          line.sizes = sumContractorAllocationSizes(line.splitRows, lineCodes);
+        }
         renderApp();
       }
     });
@@ -511,13 +664,27 @@ export function attachAdminOrderCreationHandlers(): void {
 
   document.querySelectorAll<HTMLInputElement>('.admin-line-split-size-val').forEach(inp => {
     inp.addEventListener('input', () => {
+      syncSizeInputHighlight(inp);
       const idx = Number(inp.getAttribute('data-line-index'));
       const sIdx = Number(inp.getAttribute('data-split-index'));
       const sz = inp.getAttribute('data-size') || '';
       const line = state.adminOrderArticleLines[idx];
       if (line?.splitRows[sIdx] && sz) {
         line.splitRows[sIdx].sizes[sz] = Math.max(0, parseInt(inp.value || '0', 10) || 0);
-        updateAdminLineSplitBalanceDom(idx);
+        if ((line.splitTargetMode || 'auto') === 'auto') {
+          const lineCodes = getScaleSizeCodes(state.adminOverview.sizeStandards, line.sizeFormat || 'LEGACY_7_11');
+          const summed = sumContractorAllocationSizes(line.splitRows, lineCodes);
+          line.sizes = summed;
+          document.querySelectorAll<HTMLInputElement>(`.admin-line-size-val[data-line-index="${idx}"]`).forEach(topInp => {
+            const topSz = topInp.getAttribute('data-size') || '';
+            if (topSz) {
+              const v = summed[topSz] || 0;
+              topInp.value = v > 0 ? String(v) : '';
+              syncSizeInputHighlight(topInp);
+            }
+          });
+        }
+        updateAdminMultiTotalDom(idx);
       }
     });
   });
@@ -539,7 +706,9 @@ export function attachAdminOrderCreationHandlers(): void {
     const activeCodes = getActiveAdminOrderSizeCodes();
     if (state.adminOrderSplitRows.length > 0) {
       state.adminOrderSplitRows = [];
+      state.adminOrderSplitTargetMode = 'auto';
     } else {
+      state.adminOrderSplitTargetMode = calculateSizeTotal(state.adminOrderDraft.sizes) > 0 ? 'manual' : 'auto';
       const firstMaker = state.adminOrderDraft.maker || state.dropdownOptions.makers[0] || '';
       const secondMaker = state.dropdownOptions.makers.find(m => m !== firstMaker) || '';
       state.adminOrderSplitRows = [
@@ -575,10 +744,26 @@ export function attachAdminOrderCreationHandlers(): void {
 
   document.querySelectorAll<HTMLInputElement>('.admin-split-size-val').forEach(inp => {
     inp.addEventListener('input', () => {
+      syncSizeInputHighlight(inp);
       const idx = Number(inp.getAttribute('data-split-index'));
       const sz = inp.getAttribute('data-size');
       if (state.adminOrderSplitRows[idx] && sz) {
         state.adminOrderSplitRows[idx].sizes[sz] = Math.max(0, parseInt(inp.value || '0', 10) || 0);
+        if (state.adminOrderSplitTargetMode === 'auto') {
+          const activeCodes = getActiveAdminOrderSizeCodes();
+          const summed = sumContractorAllocationSizes(state.adminOrderSplitRows, activeCodes);
+          state.adminOrderDraft.sizes = summed;
+          document.querySelectorAll<HTMLInputElement>('.admin-order-size-val').forEach(topInp => {
+            const topSz = topInp.getAttribute('data-size') || '';
+            if (topSz) {
+              const v = summed[topSz] || 0;
+              topInp.value = v > 0 ? String(v) : '';
+              syncSizeInputHighlight(topInp);
+            }
+          });
+          const totCell = document.getElementById('admin-order-size-total');
+          if (totCell) totCell.textContent = calculateSizeTotal(summed).toLocaleString();
+        }
         updateAdminSplitBalanceDom();
       }
     });
@@ -613,6 +798,7 @@ export function attachAdminOrderCreationHandlers(): void {
       sizes: createEmptySizes()
     };
     state.adminOrderSplitRows = [];
+    state.adminOrderSplitTargetMode = 'auto';
     state.adminOrderArticleLines = [];
     state.adminMultiArticlePickerOpen = false;
     state.adminMultiArticleSearch = '';
@@ -654,9 +840,9 @@ export function attachAdminOrderCreationHandlers(): void {
         const line = lines[idx];
         const lineCodes = getScaleSizeCodes(state.adminOverview.sizeStandards, line.sizeFormat || 'LEGACY_7_11');
         if (line.splitRows.length > 0) {
-          const splitCheck = validateContractorAllocations(line.sizes, line.splitRows, lineCodes);
+          const splitCheck = validateContractorAllocations(line.sizes, line.splitRows, lineCodes, { allowPartial: true });
           if (!splitCheck.valid) {
-            showToast(`Sub-order ${idx + 1} (${line.article}): ${splitCheck.error || 'Split must equal article size totals.'}`);
+            showToast(`Sub-order ${idx + 1} (${line.article}): ${splitCheck.error || 'Adjust contractor split quantities.'}`);
             return;
           }
         } else {
@@ -672,8 +858,11 @@ export function attachAdminOrderCreationHandlers(): void {
 
       const items = lines.map(line => {
         const lineSplit = line.splitRows.length > 0;
+        const activeLineRows = lineSplit
+          ? line.splitRows.filter(r => r.maker.trim() || calculateSizeTotal(r.sizes) > 0)
+          : [];
         const effectiveMaker = lineSplit
-          ? line.splitRows.map(r => r.maker.trim()).filter(Boolean).join(', ')
+          ? activeLineRows.map(r => r.maker.trim()).filter(Boolean).join(', ')
           : (line.maker || state.adminOrderDraft.maker || '').trim();
         const linePairs = calculateSizeTotal(line.sizes);
         return {
@@ -685,8 +874,9 @@ export function attachAdminOrderCreationHandlers(): void {
           maker: effectiveMaker,
           sizes: { ...line.sizes },
           totalQty: linePairs,
+          allowPartialAllocation: lineSplit,
           allocations: lineSplit
-            ? line.splitRows.map(r => ({
+            ? activeLineRows.map(r => ({
                 maker: r.maker.trim(),
                 sizes: { ...r.sizes },
                 dueDate: r.dueDate || line.dueDate || dueDate || ''
@@ -746,6 +936,7 @@ export function attachAdminOrderCreationHandlers(): void {
             sizes: createEmptySizes()
           };
           state.adminOrderSplitRows = [];
+          state.adminOrderSplitTargetMode = 'auto';
           state.adminOrderArticleLines = [];
           state.adminMultiArticlePickerOpen = false;
           state.adminMultiArticleSearch = '';
@@ -766,8 +957,11 @@ export function attachAdminOrderCreationHandlers(): void {
     }
 
     const splitActive = state.adminOrderSplitRows.length > 0;
+    const activeSingleSplitRows = splitActive
+      ? state.adminOrderSplitRows.filter(r => r.maker.trim() || calculateSizeTotal(r.sizes) > 0)
+      : [];
     const maker = splitActive
-      ? state.adminOrderSplitRows.map(r => r.maker.trim()).filter(Boolean).join(', ')
+      ? activeSingleSplitRows.map(r => r.maker.trim()).filter(Boolean).join(', ')
       : state.adminOrderDraft.maker;
     const article = state.adminOrderDraft.article;
     const color = state.adminOrderDraft.color;
@@ -780,9 +974,11 @@ export function attachAdminOrderCreationHandlers(): void {
         showToast('Select the required Article.');
         return;
       }
-      const splitCheck = validateContractorAllocations(sizes, state.adminOrderSplitRows, getActiveAdminOrderSizeCodes());
+      const splitCheck = validateContractorAllocations(sizes, state.adminOrderSplitRows, getActiveAdminOrderSizeCodes(), {
+        allowPartial: true
+      });
       if (!splitCheck.valid) {
-        showToast(splitCheck.error || 'Contractor split quantities must equal the order size totals.');
+        showToast(splitCheck.error || 'Adjust contractor split quantities.');
         return;
       }
     } else {
@@ -805,8 +1001,9 @@ export function attachAdminOrderCreationHandlers(): void {
       dueDate,
       sizes,
       totalQty: totalPairs,
+      allowPartialAllocation: splitActive,
       allocations: splitActive
-        ? state.adminOrderSplitRows.map(r => ({
+        ? activeSingleSplitRows.map(r => ({
             maker: r.maker.trim(),
             sizes: { ...r.sizes },
             dueDate: r.dueDate || dueDate || ''
@@ -844,6 +1041,7 @@ export function attachAdminOrderCreationHandlers(): void {
           sizes: createEmptySizes()
         };
         state.adminOrderSplitRows = [];
+        state.adminOrderSplitTargetMode = 'auto';
         if (po && !state.dropdownOptions.poList.includes(po)) {
           state.dropdownOptions.poList.unshift(po);
         }

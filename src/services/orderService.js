@@ -121,27 +121,38 @@ function normalizePendingOrderPayload(database, schema, payload) {
   const orderSizesJson = isLegacy ? '{}' : JSON.stringify(parsedOrder.normalized);
   const rawDueDate = String(payload.dueDate || payload.due_date || '').trim();
 
+  const allowPartial = Boolean(payload.allowPartialAllocation);
   let normalizedAllocations = [];
   if (Array.isArray(payload.allocations) && payload.allocations.length > 0) {
+    const rawAllocList = allowPartial
+      ? payload.allocations.filter(rawAlloc => {
+          const m = String(rawAlloc?.maker || rawAlloc?.makerContractor || '').trim();
+          const hasAnyPairs = scaleCodes.some(code => Number(rawAlloc?.sizes?.[code] || 0) > 0);
+          return Boolean(m) || hasAnyPairs;
+        })
+      : payload.allocations;
+
     const seenMakers = new Set();
     const sumSizes = Object.fromEntries(scaleCodes.map(c => [c, 0]));
-    for (const rawAlloc of payload.allocations) {
+    let allocatedTotal = 0;
+    for (const rawAlloc of rawAllocList) {
       const allocMaker = String(rawAlloc?.maker || rawAlloc?.makerContractor || '').trim();
       if (!allocMaker) {
-        throw new Error('Every contractor split row must have a Contractor / Maker selected.');
+        throw setStatus(new Error('Every contractor split row must have a Contractor / Maker selected.'), 400);
       }
       const makerKey = allocMaker.toLowerCase();
       if (seenMakers.has(makerKey)) {
-        throw new Error(`Duplicate contractor "${allocMaker}" in order split allocations.`);
+        throw setStatus(new Error(`Duplicate contractor "${allocMaker}" in order split allocations.`), 400);
       }
       seenMakers.add(makerKey);
       const parsedAlloc = parseScaleSizes(rawAlloc?.sizes || {}, scaleCodes, `Contractor "${allocMaker}"`);
       if (totalQty > 0 && parsedAlloc.sum <= 0) {
-        throw new Error(`Contractor "${allocMaker}" must be assigned at least 1 pair.`);
+        throw setStatus(new Error(`Contractor "${allocMaker}" must be assigned at least 1 pair.`), 400);
       }
       for (const code of scaleCodes) {
         sumSizes[code] += parsedAlloc.normalized[code];
       }
+      allocatedTotal += parsedAlloc.sum;
       normalizedAllocations.push({
         maker: allocMaker,
         sizesMap: parsedAlloc.normalized,
@@ -155,7 +166,13 @@ function normalizePendingOrderPayload(database, schema, payload) {
         dueDate: String(rawAlloc?.dueDate || rawAlloc?.due_date || rawDueDate || '').trim()
       });
     }
-    if (scaleCodes.some(code => sumSizes[code] !== parsedOrder.normalized[code])) {
+    if (allowPartial && totalQty > 0 && (normalizedAllocations.length === 0 || allocatedTotal <= 0)) {
+      throw setStatus(new Error('Assign at least 1 pair to a contractor, or clear split mode.'), 400);
+    }
+    if (scaleCodes.some(code => sumSizes[code] > parsedOrder.normalized[code])) {
+      throw setStatus(new Error('Contractor size splits cannot exceed the order size breakdown.'), 400);
+    }
+    if (!allowPartial && scaleCodes.some(code => sumSizes[code] !== parsedOrder.normalized[code])) {
       throw new Error('Contractor size splits must add up exactly to the order size breakdown.');
     }
   }
@@ -829,6 +846,273 @@ export function deletePendingOrder(database, orderId, {
 
     database.exec('COMMIT');
     return { deleted: true, orderId: normalizedOrderId };
+  } catch (error) {
+    try {
+      database.exec('ROLLBACK');
+    } catch {
+      // Preserve the original transaction error.
+    }
+    throw error;
+  }
+}
+
+export function assignRemainingOrderAllocations(database, orderId, payload, {
+  actor = 'System Operator',
+  role = 'SUPER_USER',
+  recordAuditLog
+} = {}) {
+  const normalizedOrderId = String(orderId || '').trim();
+  if (!normalizedOrderId) throw setStatus(new Error('orderId is required'), 400);
+  if (typeof recordAuditLog !== 'function') {
+    throw new Error('Order allocation update requires an audit logger');
+  }
+
+  const schema = getOrderSchemaSupport(database);
+  const hasDeletedAt = database.prepare(`PRAGMA table_info(pending_orders)`).all().some(c => c.name === 'deleted_at');
+
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    const order = database.prepare(
+      `SELECT * FROM pending_orders WHERE order_id = ?${hasDeletedAt ? ' AND deleted_at IS NULL' : ''}`
+    ).get(normalizedOrderId);
+    if (!order) throw setStatus(new Error(`Pending Order ${normalizedOrderId} not found`), 404);
+    if (!schema.hasAllocTable) {
+      throw setStatus(new Error('Contractor allocations table is unavailable.'), 500);
+    }
+
+    const { sizeFormat, scaleCodes } = resolveScaleCodes(database, schema, {
+      requestedFormat: schema.hasSizeFormatCol ? order.size_format : 'LEGACY_7_11',
+      productId: schema.hasIdsCol ? order.product_id : ''
+    });
+    const isLegacy = sizeFormat === 'LEGACY_7_11';
+    const parsedOrderJson = isLegacy ? {} : JSON.parse(order.sizes_json || '{}');
+    const plannedSizes = isLegacy
+      ? {
+          '7': Number(order.size_7 || 0),
+          '8': Number(order.size_8 || 0),
+          '9': Number(order.size_9 || 0),
+          '10': Number(order.size_10 || 0),
+          '11': Number(order.size_11 || 0)
+        }
+      : Object.fromEntries(scaleCodes.map(c => [c, Number(parsedOrderJson[c] || 0)]));
+
+    const existingRows = database.prepare(
+      `SELECT * FROM order_contractor_allocations WHERE order_id = ? ORDER BY id ASC`
+    ).all(normalizedOrderId);
+
+    const existingBySize = Object.fromEntries(scaleCodes.map(c => [c, 0]));
+    let existingAssignedTotal = 0;
+    const rowByMakerKey = new Map();
+
+    if (existingRows.length === 0) {
+      for (const c of scaleCodes) {
+        const v = Number(plannedSizes[c] || 0);
+        existingBySize[c] = v;
+        existingAssignedTotal += v;
+      }
+    } else {
+      for (const r of existingRows) {
+        const rFmt = String(r.size_format || sizeFormat || 'LEGACY_7_11').trim();
+        const rJson = rFmt === 'LEGACY_7_11' ? {} : JSON.parse(r.sizes_json || '{}');
+        const rSizes = rFmt === 'LEGACY_7_11'
+          ? {
+              '7': Number(r.size_7 || 0),
+              '8': Number(r.size_8 || 0),
+              '9': Number(r.size_9 || 0),
+              '10': Number(r.size_10 || 0),
+              '11': Number(r.size_11 || 0)
+            }
+          : Object.fromEntries(scaleCodes.map(c => [c, Number(rJson[c] || 0)]));
+        for (const c of scaleCodes) {
+          existingBySize[c] += Number(rSizes[c] || 0);
+        }
+        existingAssignedTotal += Number(r.total_qty || 0);
+        const mk = String(r.maker_contractor || '').trim().toLowerCase();
+        if (mk) rowByMakerKey.set(mk, { row: r, sizes: rSizes });
+      }
+    }
+
+    const unassignedBySize = Object.fromEntries(
+      scaleCodes.map(c => [c, Math.max(0, Number(plannedSizes[c] || 0) - Number(existingBySize[c] || 0))])
+    );
+    const totalUnassigned = scaleCodes.reduce((s, c) => s + unassignedBySize[c], 0);
+    if (totalUnassigned <= 0) {
+      throw setStatus(new Error(`Order ${normalizedOrderId} has no unassigned pairs remaining.`), 400);
+    }
+
+    const rawAllocs = Array.isArray(payload?.allocations) ? payload.allocations : [];
+    const candidateRows = rawAllocs.filter(a => {
+      const m = String(a?.maker || a?.makerContractor || '').trim();
+      const anyPairs = scaleCodes.some(c => Number(a?.sizes?.[c] || 0) > 0);
+      return Boolean(m) || anyPairs;
+    });
+    if (candidateRows.length === 0) {
+      throw setStatus(new Error('Add at least one contractor allocation row.'), 400);
+    }
+
+    const seenBatchMakers = new Set();
+    const incomingSumBySize = Object.fromEntries(scaleCodes.map(c => [c, 0]));
+    const parsedBatch = [];
+    let newlyAssignedPairs = 0;
+
+    for (const raw of candidateRows) {
+      const makerName = String(raw?.maker || raw?.makerContractor || '').trim();
+      if (!makerName) {
+        throw setStatus(new Error('Select a Contractor / Maker on every row.'), 400);
+      }
+      const mk = makerName.toLowerCase();
+      if (seenBatchMakers.has(mk)) {
+        throw setStatus(new Error(`Duplicate contractor "${makerName}" in assignment rows.`), 400);
+      }
+      seenBatchMakers.add(mk);
+
+      const parsedRow = parseScaleSizes(raw?.sizes || {}, scaleCodes, `Contractor "${makerName}"`);
+      if (parsedRow.sum <= 0) {
+        throw setStatus(new Error(`Contractor "${makerName}" must be assigned at least 1 pair.`), 400);
+      }
+      for (const c of scaleCodes) {
+        incomingSumBySize[c] += parsedRow.normalized[c];
+      }
+      newlyAssignedPairs += parsedRow.sum;
+      parsedBatch.push({
+        maker: makerName,
+        makerKey: mk,
+        sizes: parsedRow.normalized,
+        sum: parsedRow.sum,
+        dueDate: String(raw?.dueDate || raw?.due_date || order.due_date || '').trim()
+      });
+    }
+
+    for (const c of scaleCodes) {
+      if (incomingSumBySize[c] > unassignedBySize[c]) {
+        throw setStatus(
+          new Error(`Size ${c} assignment (${incomingSumBySize[c]}) exceeds unassigned balance (${unassignedBySize[c]} pairs).`),
+          400
+        );
+      }
+    }
+
+    for (const item of parsedBatch) {
+      const existingEntry = rowByMakerKey.get(item.makerKey);
+      if (existingEntry) {
+        const mergedSizes = {};
+        let mergedTotal = 0;
+        for (const c of scaleCodes) {
+          mergedSizes[c] = Number(existingEntry.sizes[c] || 0) + Number(item.sizes[c] || 0);
+          mergedTotal += mergedSizes[c];
+        }
+        const mergedJson = isLegacy ? '{}' : JSON.stringify(mergedSizes);
+        const nextDue = item.dueDate || existingEntry.row.due_date || order.due_date || '';
+        if (schema.hasAllocSizeFormatCol) {
+          database.prepare(`
+            UPDATE order_contractor_allocations
+            SET size_format = ?, sizes_json = ?, size_7 = ?, size_8 = ?, size_9 = ?, size_10 = ?, size_11 = ?, total_qty = ?, due_date = ?
+            WHERE id = ?
+          `).run(
+            sizeFormat,
+            mergedJson,
+            isLegacy ? Number(mergedSizes['7'] || 0) : 0,
+            isLegacy ? Number(mergedSizes['8'] || 0) : 0,
+            isLegacy ? Number(mergedSizes['9'] || 0) : 0,
+            isLegacy ? Number(mergedSizes['10'] || 0) : 0,
+            isLegacy ? Number(mergedSizes['11'] || 0) : 0,
+            mergedTotal,
+            nextDue,
+            existingEntry.row.id
+          );
+        } else {
+          database.prepare(`
+            UPDATE order_contractor_allocations
+            SET size_7 = ?, size_8 = ?, size_9 = ?, size_10 = ?, size_11 = ?, total_qty = ?, due_date = ?
+            WHERE id = ?
+          `).run(
+            Number(mergedSizes['7'] || 0),
+            Number(mergedSizes['8'] || 0),
+            Number(mergedSizes['9'] || 0),
+            Number(mergedSizes['10'] || 0),
+            Number(mergedSizes['11'] || 0),
+            mergedTotal,
+            nextDue,
+            existingEntry.row.id
+          );
+        }
+      } else {
+        const allocJson = isLegacy ? '{}' : JSON.stringify(item.sizes);
+        if (schema.hasAllocSizeFormatCol) {
+          database.prepare(`
+            INSERT INTO order_contractor_allocations (
+              order_id, maker_contractor, size_format, sizes_json, size_7, size_8, size_9, size_10, size_11, total_qty, due_date
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            normalizedOrderId,
+            item.maker,
+            sizeFormat,
+            allocJson,
+            isLegacy ? Number(item.sizes['7'] || 0) : 0,
+            isLegacy ? Number(item.sizes['8'] || 0) : 0,
+            isLegacy ? Number(item.sizes['9'] || 0) : 0,
+            isLegacy ? Number(item.sizes['10'] || 0) : 0,
+            isLegacy ? Number(item.sizes['11'] || 0) : 0,
+            item.sum,
+            item.dueDate
+          );
+        } else {
+          database.prepare(`
+            INSERT INTO order_contractor_allocations (
+              order_id, maker_contractor, size_7, size_8, size_9, size_10, size_11, total_qty, due_date
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            normalizedOrderId,
+            item.maker,
+            Number(item.sizes['7'] || 0),
+            Number(item.sizes['8'] || 0),
+            Number(item.sizes['9'] || 0),
+            Number(item.sizes['10'] || 0),
+            Number(item.sizes['11'] || 0),
+            item.sum,
+            item.dueDate
+          );
+        }
+      }
+    }
+
+    const updatedAllocs = database.prepare(
+      `SELECT maker_contractor, due_date FROM order_contractor_allocations WHERE order_id = ? ORDER BY id ASC`
+    ).all(normalizedOrderId);
+    const updatedMakers = updatedAllocs.map(r => String(r.maker_contractor || '').trim()).filter(Boolean).join(', ');
+    const latestAllocDue = updatedAllocs.map(r => String(r.due_date || '').trim()).filter(Boolean).sort().pop() || '';
+    const nextOrderDue = String(order.due_date || '').trim() || latestAllocDue;
+
+    if (schema.hasDueDateCol) {
+      database.prepare(`UPDATE pending_orders SET maker_contractor = ?, due_date = ? WHERE order_id = ?`).run(
+        updatedMakers || order.maker_contractor,
+        nextOrderDue,
+        normalizedOrderId
+      );
+    } else {
+      database.prepare(`UPDATE pending_orders SET maker_contractor = ? WHERE order_id = ?`).run(
+        updatedMakers || order.maker_contractor,
+        normalizedOrderId
+      );
+    }
+
+    const remainingUnassignedPairs = Math.max(0, totalUnassigned - newlyAssignedPairs);
+    const batchSummary = parsedBatch.map(b => `${b.maker} (${b.sum})`).join(', ');
+    recordAuditLog({
+      actor,
+      role,
+      action: 'ORDER_ASSIGN_REMAINING',
+      entityId: normalizedOrderId,
+      orderId: normalizedOrderId,
+      beforeSummary: `${existingAssignedTotal} Prs assigned (${totalUnassigned} unassigned)`,
+      afterSummary: `+${newlyAssignedPairs} Prs [${batchSummary}] · ${remainingUnassignedPairs} unassigned`,
+      reason: String(payload?.reason || '').trim()
+    });
+
+    database.exec('COMMIT');
+    return { orderId: normalizedOrderId, newlyAssignedPairs, remainingUnassignedPairs };
   } catch (error) {
     try {
       database.exec('ROLLBACK');

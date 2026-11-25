@@ -46,6 +46,8 @@ export interface OrderWipState {
   outputPairs: number;
   outputCartons: number;
   inAlteration: number;
+  reworkAtInwardPairs?: number;
+  reworkReissueRequestedPairs?: number;
   scrappedPairs?: number;
   finalQcApproved?: boolean;
   alterationCycleCount?: number;
@@ -150,6 +152,58 @@ export function isStage5ReadyForCartons(wip: Partial<OrderWipState>): boolean {
   const s4Passed = Number(wip.stage4Passed || 0);
   const outputPairs = Number(wip.outputPairs || 0);
   return Boolean(wip.finalQcApproved && s4Passed > outputPairs);
+}
+
+/**
+ * Returns true when a requisition is actively owned by the Packing Hall floor
+ * (Stages 1–4, pending Inward issue, or active rework returning to Stages 1–4).
+ * Excludes empty placeholders, voided requisitions, Stage 5 (Cartons), Completed,
+ * and fully-polybagged lots strictly handed off to Super User Final QC.
+ */
+export function isPackingFloorActiveRequisition(wip: Partial<OrderWipState> | null | undefined): boolean {
+  if (!wip || wip.isVoided) return false;
+  const hasRealRequisition = Number(wip.plannedQty || 0) > 0 || Boolean(wip.parentOrderId);
+  if (!hasRealRequisition) return false;
+
+  const hasReworkBackAtInward =
+    Number(wip.reworkAtInwardPairs || 0) > 0 ||
+    Number(wip.reworkReissueRequestedPairs || 0) > 0;
+  if (hasReworkBackAtInward) return true;
+
+  const s1Rem = Math.max(0, Number(wip.stage1In || 0) - Number(wip.stage1Passed || 0) - Number(wip.stage1Defects || 0));
+  const s2Rem = Math.max(0, Number(wip.stage2In || 0) - Number(wip.stage2Passed || 0) - Number(wip.stage2Defects || 0));
+  const s3Rem = Math.max(0, Number(wip.stage3In || 0) - Number(wip.stage3Passed || 0) - Number(wip.stage3Defects || 0));
+  const s4Rem = Math.max(0, Number(wip.stage4In || 0) - Number(wip.stage4Passed || 0));
+  const hasActiveFloorPairs = s1Rem > 0 || s2Rem > 0 || s3Rem > 0 || s4Rem > 0;
+
+  const stage = determineOrderActiveStage(wip);
+  if (stage === 'COMPLETED' || stage === 'STEP_5') return hasActiveFloorPairs;
+
+  if (isPackingAwaitingFinalQc(wip)) {
+    return hasActiveFloorPairs;
+  }
+
+  return true;
+}
+
+/**
+ * Returns sorted (ascending numeric) requisition numbers currently active on the Packing Hall floor.
+ */
+export function getPackingFloorActiveReqNumbers(
+  ordersWipMap: Record<string, Partial<OrderWipState> | null | undefined>,
+  currentReqNumber?: string,
+  currentWip?: Partial<OrderWipState> | null
+): string[] {
+  const activeSet = new Set<string>();
+  for (const [reqNo, item] of Object.entries(ordersWipMap || {})) {
+    if (isPackingFloorActiveRequisition(item)) activeSet.add(reqNo);
+  }
+  if (currentReqNumber && isPackingFloorActiveRequisition(currentWip)) {
+    activeSet.add(currentReqNumber);
+  }
+  return Array.from(activeSet).sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  );
 }
 
 /**

@@ -104,6 +104,9 @@ function getAllowedRoles(req) {
   if (path === '/qc/aql-calc' || /^\/export\/manifest\/[^/]+$/.test(path)) {
     return ['SUPER_USER', 'PACKING_SUPERVISOR', 'QC_INSPECTOR'];
   }
+  if (path === '/sync/stamp' && method === 'GET') {
+    return ['SUPER_USER', 'INWARD_CLERK', 'PACKING_SUPERVISOR', 'QC_INSPECTOR', 'ALTERATION_LEAD'];
+  }
   if (path === '/inventory/gloves' || path === '/inventory/materials' || path === '/customers' || path === '/products' || path === '/size-standards') {
     return ['SUPER_USER', 'INWARD_CLERK', 'PACKING_SUPERVISOR', 'QC_INSPECTOR', 'ALTERATION_LEAD'];
   }
@@ -157,6 +160,7 @@ apiRouter.use((req, res, next) => {
 });
 
 // --- INVENTORY & MASTERS ---
+apiRouter.get('/sync/stamp', handle(() => PackingService.getSyncStamp()));
 apiRouter.get('/inventory/gloves', handle(() => PackingService.getGloveInventory()));
 apiRouter.get('/inventory/materials', handle(() => PackingService.getMaterialInventory()));
 apiRouter.get('/customers', handle(() => PackingService.getCustomers()));
@@ -485,6 +489,19 @@ apiRouter.post('/admin/master/product', handle((req) => {
   return PackingService.upsertProductAdmin(req.body);
 }));
 
+apiRouter.put('/admin/master/product/:productId/carton', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  return PackingService.updateProductCartonPackingAdmin({
+    productId: req.params.productId,
+    pairsPerCarton: req.body?.pairsPerCarton,
+    stickersPerPair: req.body?.stickersPerPair,
+    polybagPerPair: req.body?.polybagPerPair,
+    silicaGelPerPair: req.body?.silicaGelPerPair,
+    actor,
+    role
+  });
+}));
+
 apiRouter.post('/admin/wip/:reqNo/override', handle((req) => {
   return PackingService.overrideWipAdmin(req.params.reqNo, req.body);
 }));
@@ -517,9 +534,28 @@ apiRouter.post('/admin/pending-orders/:orderId/short-close', handle((req) => {
   return PackingService.shortClosePendingOrder(req.params.orderId, req.body?.reason, actor, role);
 }));
 
+apiRouter.post('/admin/pending-orders/:orderId/assign-remaining', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  return PackingService.assignRemainingOrderAllocationsAdmin(req.params.orderId, req.body, actor, role);
+}));
+
 apiRouter.delete('/admin/pending-orders/:orderId', handle((req) => {
   const { actor, role } = getActorMeta(req);
   return PackingService.deletePendingOrderAdmin(req.params.orderId, actor, role);
+}));
+
+apiRouter.get('/admin/makers', handle(() => {
+  return PackingService.getMakers();
+}));
+
+apiRouter.post('/admin/makers', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  return PackingService.createMakerAdmin(req.body?.name, actor, role);
+}));
+
+apiRouter.delete('/admin/makers/:id', handle((req) => {
+  const { actor, role } = getActorMeta(req, 'SUPER_USER');
+  return PackingService.deleteMakerAdmin(req.params.id, actor, role);
 }));
 
 apiRouter.get('/admin/halls', handle(() => {

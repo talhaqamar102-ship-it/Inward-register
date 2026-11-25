@@ -14,6 +14,8 @@ export interface CatalogProductOption {
   article_code?: string;
   raw_color?: string;
   color_spec?: string;
+  color_options_json?: string;
+  color_options?: string[];
   size_format?: string;
   customer_id: string;
   customer_name?: string;
@@ -21,6 +23,64 @@ export interface CatalogProductOption {
   silica_gel_per_pair?: number;
   stickers_per_pair?: number;
   pairs_per_carton?: number;
+}
+
+export const PRESET_GLOVE_COLORS = [
+  'Black',
+  'White',
+  'Grey',
+  'Brown',
+  'Tan',
+  'Red',
+  'Blue',
+  'Green',
+  'Hi-Vis Yellow',
+  'Hi-Vis Orange'
+] as const;
+
+/** Trim, drop empty strings, and deduplicate color options case-insensitively while preserving first-seen casing. */
+export function normalizeColorOptionList(options: readonly unknown[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of options || []) {
+    const clean = String(item ?? '').trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+  }
+  return out;
+}
+
+/** Resolve all configured colorways for a catalog article, falling back to color_spec / raw_color for legacy rows. */
+export function parseProductColorOptions(
+  product?: {
+    color_options_json?: string;
+    color_options?: readonly string[];
+    color_spec?: string;
+    raw_color?: string;
+  } | null
+): string[] {
+  if (!product) return [];
+  if (Array.isArray(product.color_options) && product.color_options.length > 0) {
+    const normalized = normalizeColorOptionList(product.color_options);
+    if (normalized.length > 0) return normalized;
+  }
+  const rawJson = String(product.color_options_json || '').trim();
+  if (rawJson && rawJson !== '[]') {
+    try {
+      const parsed = JSON.parse(rawJson);
+      if (Array.isArray(parsed)) {
+        const normalized = normalizeColorOptionList(parsed);
+        if (normalized.length > 0) return normalized;
+      }
+    } catch {
+      // Ignore malformed JSON and fall back to single colorway fields below.
+    }
+  }
+  const fallback = String(product.color_spec || product.raw_color || '').trim();
+  return fallback ? [fallback] : [];
 }
 
 const LEGACY_SIZE_LABELS_MAP: Record<string, string> = {
@@ -268,6 +328,9 @@ export interface PendingOrder {
   createdAt?: string;
   sizes?: SizeBreakdown;
   totalQty?: number;
+  assignedQty?: number;
+  unassignedQty?: number;
+  unassignedSizes?: SizeBreakdown;
   notes?: string;
   shortClosed?: boolean;
   shortCloseReason?: string;
@@ -287,10 +350,25 @@ export interface PendingOrder {
   contractorAllocations?: ContractorOrderAllocation[];
 }
 
+export function sumContractorAllocationSizes(
+  allocations: Array<{ sizes?: Partial<SizeBreakdown> }>,
+  sizeCodes: readonly string[] = STANDARD_GLOVE_SIZES
+): SizeBreakdown {
+  const activeCodes = sizeCodes.length > 0 ? sizeCodes : STANDARD_GLOVE_SIZES;
+  const totals = createEmptySizes(activeCodes);
+  for (const row of allocations || []) {
+    for (const sz of activeCodes) {
+      totals[sz] += Math.max(0, Number(row?.sizes?.[sz] || 0));
+    }
+  }
+  return totals;
+}
+
 export function validateContractorAllocations(
   orderSizes: SizeBreakdown,
   allocations: Array<{ maker: string; sizes: SizeBreakdown; dueDate?: string }>,
-  sizeCodes: readonly string[] = STANDARD_GLOVE_SIZES
+  sizeCodes: readonly string[] = STANDARD_GLOVE_SIZES,
+  options?: { allowPartial?: boolean }
 ): {
   valid: boolean;
   error?: string;
@@ -298,6 +376,7 @@ export function validateContractorAllocations(
   totalUnassigned: number;
 } {
   const activeCodes = sizeCodes.length > 0 ? sizeCodes : STANDARD_GLOVE_SIZES;
+  const allowPartial = Boolean(options?.allowPartial);
   const orderTotal = activeCodes.reduce((sum, sz) => sum + Math.max(0, Number(orderSizes[sz] || 0)), 0);
   const sumBySize = createEmptySizes(activeCodes);
   const seenMakers = new Set<string>();
@@ -312,18 +391,12 @@ export function validateContractorAllocations(
   }
 
   let firstError: string | undefined;
+  let activeRowCount = 0;
+  let allocatedTotal = 0;
+
   for (let i = 0; i < allocations.length; i++) {
     const row = allocations[i];
     const maker = String(row?.maker || '').trim();
-    if (!maker && !firstError) {
-      firstError = `Row ${i + 1}: Select a Contractor / Maker.`;
-    }
-    const makerKey = maker.toLowerCase();
-    if (maker && seenMakers.has(makerKey) && !firstError) {
-      firstError = `Duplicate contractor "${maker}" in split allocation.`;
-    }
-    if (maker) seenMakers.add(makerKey);
-
     let rowTotal = 0;
     for (const sz of activeCodes) {
       const val = Number(row?.sizes?.[sz] || 0);
@@ -334,9 +407,31 @@ export function validateContractorAllocations(
       sumBySize[sz] += cleanVal;
       rowTotal += cleanVal;
     }
+
+    if (allowPartial && !maker && rowTotal === 0) {
+      continue;
+    }
+    activeRowCount += 1;
+    allocatedTotal += rowTotal;
+
+    if (!maker && !firstError) {
+      firstError = `Row ${i + 1}: Select a Contractor / Maker.`;
+    }
+    const makerKey = maker.toLowerCase();
+    if (maker && seenMakers.has(makerKey) && !firstError) {
+      firstError = `Duplicate contractor "${maker}" in split allocation.`;
+    }
+    if (maker) seenMakers.add(makerKey);
+
     if (orderTotal > 0 && rowTotal <= 0 && !firstError) {
       firstError = `Contractor "${maker || `#${i + 1}`}" must have at least 1 pair assigned.`;
     }
+  }
+
+  if (allowPartial && activeRowCount === 0 && !firstError) {
+    firstError = 'Add at least one contractor allocation.';
+  } else if (allowPartial && orderTotal > 0 && allocatedTotal <= 0 && !firstError) {
+    firstError = 'Assign at least 1 pair to a contractor.';
   }
 
   const unassignedBySize = createEmptySizes(activeCodes);
@@ -347,7 +442,9 @@ export function validateContractorAllocations(
   }
 
   if (!firstError) {
-    const mismatchSize = activeCodes.find(sz => unassignedBySize[sz] !== 0);
+    const mismatchSize = allowPartial
+      ? activeCodes.find(sz => unassignedBySize[sz] < 0)
+      : activeCodes.find(sz => unassignedBySize[sz] !== 0);
     if (mismatchSize) {
       const diff = unassignedBySize[mismatchSize];
       firstError = diff > 0

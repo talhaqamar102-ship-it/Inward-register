@@ -17,7 +17,9 @@ export const LOGO_SVG = `
 
 let modalReturnFocusElement: HTMLElement | null = null;
 
-// Helper: Show toast notification
+let activeToastTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Helper: Show toast notification (single slot — replaces active toast instead of stacking)
 export function showToast(message: string): void {
   let container = document.getElementById('toast-container');
   if (!container) {
@@ -29,6 +31,11 @@ export function showToast(message: string): void {
     container.setAttribute('aria-atomic', 'true');
     document.body.appendChild(container);
   }
+  if (activeToastTimer !== null) {
+    clearTimeout(activeToastTimer);
+    activeToastTimer = null;
+  }
+  container.innerHTML = '';
   const toast = document.createElement('div');
   toast.className = 'toast-message';
   const icon = document.createElement('span');
@@ -37,9 +44,10 @@ export function showToast(message: string): void {
   text.textContent = message;
   toast.append(icon, text);
   container.appendChild(toast);
-  setTimeout(() => {
+  activeToastTimer = setTimeout(() => {
     toast.remove();
-  }, 3200);
+    activeToastTimer = null;
+  }, 2800);
 }
 
 // Ensure direct print stage exists in body

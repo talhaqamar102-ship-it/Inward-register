@@ -76,6 +76,7 @@ export function initDatabase() {
       article_code TEXT NOT NULL DEFAULT '',
       raw_color TEXT NOT NULL DEFAULT '',
       color_spec TEXT NOT NULL DEFAULT '',
+      color_options_json TEXT NOT NULL DEFAULT '[]',
       size_format TEXT NOT NULL DEFAULT 'LEGACY_7_11',
       customer_id TEXT NOT NULL REFERENCES customers(id),
       polybag_per_pair INTEGER NOT NULL DEFAULT 1,
@@ -388,6 +389,12 @@ export function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS makers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS halls (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -588,6 +595,9 @@ function migrateDatabase() {
     if (!prodCols.includes('color_spec')) {
       db.exec(`ALTER TABLE products ADD COLUMN color_spec TEXT NOT NULL DEFAULT ''`);
     }
+    if (!prodCols.includes('color_options_json')) {
+      db.exec(`ALTER TABLE products ADD COLUMN color_options_json TEXT NOT NULL DEFAULT '[]'`);
+    }
     if (!prodCols.includes('size_format')) {
       db.exec(`ALTER TABLE products ADD COLUMN size_format TEXT NOT NULL DEFAULT 'LEGACY_7_11'`);
     }
@@ -740,12 +750,16 @@ function migrateDatabase() {
 
   if (isTestRuntime()) {
     try {
+      const makerCountRow = db.prepare(`SELECT COUNT(*) AS cnt FROM makers`).get();
+      if (Number(makerCountRow?.cnt || 0) === 0) {
+        db.prepare(`INSERT OR IGNORE INTO makers (name) VALUES (?), (?), (?), (?)`).run('Maker A', 'Maker B', 'Maker C', 'Maker D');
+      }
       const hallCountRow = db.prepare(`SELECT COUNT(*) AS cnt FROM halls`).get();
       if (Number(hallCountRow?.cnt || 0) === 0) {
         db.prepare(`INSERT OR IGNORE INTO halls (name) VALUES (?), (?)`).run('Hall A', 'Hall B');
       }
     } catch {
-      // Ignore if halls table is not ready
+      // Ignore if makers/halls table is not ready
     }
   }
 

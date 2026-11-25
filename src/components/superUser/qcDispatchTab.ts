@@ -51,13 +51,19 @@ export function computeQcDispatchMetrics(row: QcDispatchReqRow): QcDispatchMetri
   return { boxed, remaining, air, sea, ready, cbm, status };
 }
 
+function compareNaturalRef(a: string, b: string): number {
+  return String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
+}
+
 export function renderQcDispatchTab(ctx: SuperUserRenderContext): string {
   const allRows = ctx.qcDispatchRows || [];
   const distinctOrders = Array.from(
     new Map(allRows.map(r => [r.orderId, { orderId: r.orderId, article: r.article, po: r.po }])).values()
-  );
+  ).sort((a, b) => compareNaturalRef(a.orderId, b.orderId));
   const orderFilter = (ctx.qcDispatchOrderFilter || '').trim();
-  const rows = orderFilter ? allRows.filter(r => r.orderId === orderFilter) : allRows;
+  const rows = (orderFilter ? allRows.filter(r => r.orderId === orderFilter) : allRows)
+    .slice()
+    .sort((a, b) => compareNaturalRef(a.orderId, b.orderId) || compareNaturalRef(a.reqNumber, b.reqNumber));
 
   let awaitingAqlCount = 0;
   let readyToBoxCount = 0;
@@ -69,6 +75,52 @@ export function renderQcDispatchTab(ctx: SuperUserRenderContext): string {
     else if (metrics.status === 'Ready to release') readyToReleaseCount += 1;
     return { row, metrics };
   });
+
+  const orderGroupMap = new Map<
+    string,
+    {
+      orderId: string;
+      po: string;
+      article: string;
+      totalStage4: number;
+      aqlPassedCount: number;
+      totalBoxed: number;
+      totalAir: number;
+      totalSea: number;
+      dispatchedCount: number;
+      lots: typeof rowsWithMetrics;
+    }
+  >();
+
+  for (const item of rowsWithMetrics) {
+    const key = item.row.orderId || 'Unlinked';
+    let group = orderGroupMap.get(key);
+    if (!group) {
+      group = {
+        orderId: key,
+        po: item.row.po || '',
+        article: item.row.article || '',
+        totalStage4: 0,
+        aqlPassedCount: 0,
+        totalBoxed: 0,
+        totalAir: 0,
+        totalSea: 0,
+        dispatchedCount: 0,
+        lots: []
+      };
+      orderGroupMap.set(key, group);
+    }
+    if (!group.po && item.row.po) group.po = item.row.po;
+    if (!group.article && item.row.article) group.article = item.row.article;
+    group.totalStage4 += Number(item.row.stage4Passed || 0);
+    if (item.row.finalQcApproved) group.aqlPassedCount += 1;
+    group.totalBoxed += item.metrics.boxed;
+    group.totalAir += item.metrics.air;
+    group.totalSea += item.metrics.sea;
+    if (item.row.dispatched) group.dispatchedCount += 1;
+    group.lots.push(item);
+  }
+  const orderGroups = Array.from(orderGroupMap.values());
 
   const selectedReq = (ctx.qcDispatchSelectedReq || '').trim();
   const selectedEntry =
@@ -82,14 +134,14 @@ export function renderQcDispatchTab(ctx: SuperUserRenderContext): string {
         <div>
           <h2 class="panel-card-title" style="margin: 0; font-weight: 500;">QC &amp; dispatch</h2>
           <div style="font-size: 12px; color: var(--ink-500); margin-top: 2px;">
-            Inspect AQL 1.5, box master cartons with dimensions, assign Air or Sea, and release lots from one queue.
+            Inspect AQL 1.5, box master cartons with dimensions, assign Air or Sea, and release lots grouped by Order.
           </div>
         </div>
         <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-variant-numeric: tabular-nums; font-size: 12.5px;">
           <select id="qcd-order-select" class="form-select" aria-label="Filter QC &amp; dispatch by order" style="width: auto; min-width: 185px; padding: 4px 8px; font-size: 12px;">
             <option value="">All orders (${distinctOrders.length})</option>
             ${distinctOrders.map(o => `
-              <option value="${escapeHtml(o.orderId)}"${orderFilter === o.orderId ? ' selected' : ''}>${escapeHtml(o.orderId)}${o.article ? ` — ${escapeHtml(o.article)}` : ''}${o.po ? ` (${escapeHtml(o.po)})` : ''}</option>
+              <option value="${escapeHtml(o.orderId)}"${orderFilter === o.orderId ? ' selected' : ''}>${escapeHtml(o.orderId)}${o.po ? ` · PO ${escapeHtml(o.po)}` : ''}${o.article ? ` — ${escapeHtml(o.article)}` : ''}</option>
             `).join('')}
           </select>
           <select id="qcd-req-select" class="form-select" aria-label="Select requisition manifest" style="width: auto; min-width: 195px; padding: 4px 8px; font-size: 12px;"${rowsWithMetrics.length === 0 ? ' disabled' : ''}>
@@ -109,8 +161,9 @@ export function renderQcDispatchTab(ctx: SuperUserRenderContext): string {
         <table class="data-table">
           <thead>
             <tr>
-              <th scope="col">Requisition</th>
               <th scope="col">Order</th>
+              <th scope="col">PO #</th>
+              <th scope="col">Requisition (Lot)</th>
               <th scope="col">Article</th>
               <th scope="col" class="text-right">Stage 4 packed</th>
               <th scope="col" class="text-center">AQL</th>
@@ -121,39 +174,57 @@ export function renderQcDispatchTab(ctx: SuperUserRenderContext): string {
             </tr>
           </thead>
           <tbody>
-            ${rowsWithMetrics.length === 0 ? `
+            ${orderGroups.length === 0 ? `
               <tr>
-                <td colspan="9" class="table-empty-cell" style="padding: 28px 16px; color: var(--ink-500);">
+                <td colspan="10" class="table-empty-cell" style="padding: 28px 16px; color: var(--ink-500);">
                   No requisitions have finished Stage 4 yet. Lots appear here once the floor completes 1st packing.
                 </td>
               </tr>
-            ` : rowsWithMetrics.map(({ row, metrics }) => {
-              const isSelected = selectedEntry?.row.reqNumber === row.reqNumber;
-              return `
-                <tr data-qcd-row="${escapeHtml(row.reqNumber)}"${isSelected ? ' style="background: var(--ink-50);"' : ''}>
-                  <td style="font-weight: 500;">${escapeHtml(row.reqNumber)}</td>
-                  <td style="font-variant-numeric: tabular-nums;">${escapeHtml(row.orderId)}</td>
-                  <td>${escapeHtml(row.article || '---')}${row.po ? ` <span style="color: var(--ink-500); font-size: 11.5px;">(${escapeHtml(row.po)})</span>` : ''}</td>
-                  <td class="text-right" style="font-variant-numeric: tabular-nums;">${row.stage4Passed}</td>
-                  <td class="text-center">
-                    <span class="status-pill ${row.finalQcApproved ? 'status-pill-green' : ''}">${row.finalQcApproved ? 'Passed' : 'Pending'}</span>
-                  </td>
-                  <td class="text-right" style="font-variant-numeric: tabular-nums;">${metrics.boxed} / ${row.stage4Passed}</td>
-                  <td class="text-right" style="font-variant-numeric: tabular-nums;">${metrics.air} / ${metrics.sea}</td>
-                  <td class="text-center">
-                    <span class="status-pill ${metrics.status === 'Ready to release' || metrics.status === 'Dispatched' ? 'status-pill-green' : ''}">${metrics.status}</span>
-                  </td>
-                  <td class="text-center" style="white-space: nowrap;">
-                    ${!row.finalQcApproved ? `
-                      <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-qcd-action="aql" data-req-number="${escapeHtml(row.reqNumber)}">Inspect AQL</button>
-                    ` : ''}
-                    ${row.finalQcApproved && metrics.remaining > 0 ? `
-                      <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-qcd-action="box" data-req-number="${escapeHtml(row.reqNumber)}">Box cartons</button>
-                    ` : ''}
-                    <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-qcd-action="select" data-req-number="${escapeHtml(row.reqNumber)}">View manifest</button>
-                  </td>
+            ` : orderGroups.map(group => {
+              const groupSummaryRow = `
+                <tr class="qcd-order-group-row" data-qcd-order-group="${escapeHtml(group.orderId)}" style="background: var(--ink-50); border-top: 1px solid var(--border-strong);">
+                  <td style="font-weight: 500; font-variant-numeric: tabular-nums;">${escapeHtml(group.orderId)}</td>
+                  <td style="font-variant-numeric: tabular-nums;">${escapeHtml(group.po || '---')}</td>
+                  <td style="color: var(--ink-600); font-size: 11.5px; font-variant-numeric: tabular-nums;">${group.lots.length} ${group.lots.length === 1 ? 'lot' : 'lots'}</td>
+                  <td style="font-weight: 500;">${escapeHtml(group.article || '---')}</td>
+                  <td class="text-right" style="font-weight: 500; font-variant-numeric: tabular-nums;">${group.totalStage4}</td>
+                  <td class="text-center" style="color: var(--ink-600); font-size: 11.5px; font-variant-numeric: tabular-nums;">${group.aqlPassedCount} / ${group.lots.length} passed</td>
+                  <td class="text-right" style="font-weight: 500; font-variant-numeric: tabular-nums;">${group.totalBoxed} / ${group.totalStage4}</td>
+                  <td class="text-right" style="font-weight: 500; font-variant-numeric: tabular-nums;">${group.totalAir} / ${group.totalSea}</td>
+                  <td class="text-center" style="color: var(--ink-600); font-size: 11.5px; font-variant-numeric: tabular-nums;">${group.dispatchedCount === group.lots.length ? 'All dispatched' : `${group.dispatchedCount} / ${group.lots.length} dispatched`}</td>
+                  <td class="text-center">&nbsp;</td>
                 </tr>
               `;
+              const lotRows = group.lots.map(({ row, metrics }) => {
+                const isSelected = selectedEntry?.row.reqNumber === row.reqNumber;
+                return `
+                  <tr data-qcd-row="${escapeHtml(row.reqNumber)}"${isSelected ? ' style="background: var(--ink-50);"' : ''}>
+                    <td style="padding-left: 16px; color: var(--ink-400);" aria-label="Lot under ${escapeHtml(row.orderId)}">&#8627;</td>
+                    <td style="font-variant-numeric: tabular-nums;">${escapeHtml(row.po || '---')}</td>
+                    <td style="font-weight: 500; font-variant-numeric: tabular-nums;">${escapeHtml(row.reqNumber)}</td>
+                    <td>${escapeHtml(row.article || '---')}</td>
+                    <td class="text-right" style="font-variant-numeric: tabular-nums;">${row.stage4Passed}</td>
+                    <td class="text-center">
+                      <span class="status-pill ${row.finalQcApproved ? 'status-pill-green' : ''}">${row.finalQcApproved ? 'Passed' : 'Pending'}</span>
+                    </td>
+                    <td class="text-right" style="font-variant-numeric: tabular-nums;">${metrics.boxed} / ${row.stage4Passed}</td>
+                    <td class="text-right" style="font-variant-numeric: tabular-nums;">${metrics.air} / ${metrics.sea}</td>
+                    <td class="text-center">
+                      <span class="status-pill ${metrics.status === 'Ready to release' || metrics.status === 'Dispatched' ? 'status-pill-green' : ''}">${metrics.status}</span>
+                    </td>
+                    <td class="text-center" style="white-space: nowrap;">
+                      ${!row.finalQcApproved ? `
+                        <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-qcd-action="aql" data-req-number="${escapeHtml(row.reqNumber)}">Inspect AQL</button>
+                      ` : ''}
+                      ${row.finalQcApproved && metrics.remaining > 0 ? `
+                        <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-qcd-action="box" data-req-number="${escapeHtml(row.reqNumber)}">Box cartons</button>
+                      ` : ''}
+                      <button type="button" class="btn-outline" style="padding: 2px 8px; font-size: 11px;" data-qcd-action="select" data-req-number="${escapeHtml(row.reqNumber)}">View manifest</button>
+                    </td>
+                  </tr>
+                `;
+              }).join('');
+              return `${groupSummaryRow}${lotRows}`;
             }).join('')}
           </tbody>
         </table>
@@ -193,7 +264,7 @@ export function renderQcDispatchTab(ctx: SuperUserRenderContext): string {
   const manifestHtml = `
     <section class="panel-card" id="qcd-manifest" data-req-number="${escapeHtml(sel.reqNumber)}">
       <div class="panel-card-header" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;">
-        <h3 class="panel-card-title" style="margin: 0; font-weight: 500;">Master carton manifest &mdash; ${escapeHtml(sel.reqNumber)}</h3>
+        <h3 class="panel-card-title" style="margin: 0; font-weight: 500;">Master carton manifest &mdash; ${escapeHtml(sel.orderId || '---')}${sel.po ? ` &middot; PO ${escapeHtml(sel.po)}` : ''} &middot; ${escapeHtml(sel.reqNumber)}</h3>
         <div style="display: flex; align-items: center; gap: 8px;">
           ${sel.finalQcApproved && selMetrics.remaining > 0 ? `
             <button type="button" class="btn-outline" style="padding: 4px 10px; font-size: 12px;" data-qcd-action="box" data-req-number="${escapeHtml(sel.reqNumber)}">Box remaining (${selMetrics.remaining} prs)</button>

@@ -1,17 +1,32 @@
-import { validateCustomerMasterInputs, validateProductMasterInputs } from '../../utils/requisitionLogic';
+import {
+  escapeHtml,
+  normalizeColorOptionList,
+  validateCartonPackingInputs,
+  validateCustomerMasterInputs,
+  validateProductMasterInputs
+} from '../../utils/requisitionLogic';
 import { applyFieldValidationErrors, clearFieldValidationError, runAdminAction, showToast } from '../../utils/domModalsAndPrint';
 import { renderApp } from '../../appContext';
 import { state } from '../../state/appState';
 import { syncBackendData } from '../../state/syncService';
 
-/** Attach Master Registry collapse state and Buyer/Product/Maker/Hall/PO CRUD handlers. */
+/** Attach Master Registry tab switching and Buyer/Product/Maker/Hall/PO CRUD handlers. */
 export function attachAdminMasterRegistryHandlers(): void {
-  document.querySelectorAll<HTMLDetailsElement>('details.su-collapsible-registry[data-registry-id]').forEach(detailsEl => {
-    detailsEl.addEventListener('toggle', () => {
-      const regId = detailsEl.dataset.registryId;
-      if (regId) {
-        state.adminOpenRegistries[regId] = detailsEl.open;
-      }
+  const registryTabs = Array.from(document.querySelectorAll<HTMLButtonElement>('.su-reg-tab[data-registry-tab]'));
+  const registryPanels = Array.from(document.querySelectorAll<HTMLElement>('.su-reg-panel[data-registry-id]'));
+  registryTabs.forEach(tabBtn => {
+    tabBtn.addEventListener('click', () => {
+      const regId = tabBtn.dataset.registryTab as typeof state.adminActiveRegistryTab | undefined;
+      if (!regId) return;
+      state.adminActiveRegistryTab = regId;
+      registryTabs.forEach(btn => {
+        const isActive = btn.dataset.registryTab === regId;
+        btn.classList.toggle('is-active', isActive);
+        btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+      registryPanels.forEach(panel => {
+        panel.hidden = panel.dataset.registryId !== regId;
+      });
     });
   });
 
@@ -55,24 +70,88 @@ export function attachAdminMasterRegistryHandlers(): void {
     });
   });
 
+  const syncArticleColorChipsDom = () => {
+    const chipsContainer = document.getElementById('admin-prod-color-chips');
+    if (!chipsContainer) return;
+    const list = state.adminArticleColorDraftOptions || [];
+    if (list.length === 0) {
+      chipsContainer.innerHTML = '<span class="admin-meta-caption">No colourways added yet (add 1 fixed combination or multiple selectable options).</span>';
+      return;
+    }
+    chipsContainer.innerHTML = list
+      .map((clr, idx) => `
+        <span class="su-color-chip">
+          <span>${escapeHtml(clr)}</span>
+          <button type="button" class="su-color-chip-remove" data-remove-prod-color="${idx}" aria-label="Remove colourway ${escapeHtml(clr)}">&times;</button>
+        </span>
+      `)
+      .join('');
+    chipsContainer.querySelectorAll<HTMLButtonElement>('[data-remove-prod-color]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-remove-prod-color'));
+        if (Number.isInteger(idx) && idx >= 0 && idx < state.adminArticleColorDraftOptions.length) {
+          state.adminArticleColorDraftOptions.splice(idx, 1);
+          syncArticleColorChipsDom();
+        }
+      });
+    });
+  };
+
+  syncArticleColorChipsDom();
+
+  document.getElementById('admin-prod-cust')?.addEventListener('change', (ev) => {
+    state.adminArticleDraftCustomerId = (ev.currentTarget as HTMLSelectElement).value || '';
+  });
+
+  document.querySelectorAll<HTMLInputElement>('.su-color-preset-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const checked = Array.from(document.querySelectorAll<HTMLInputElement>('.su-color-preset-check:checked')).map(
+        el => el.value.trim()
+      );
+      state.adminArticleColorSelectedPresets = checked;
+      const colorInp = document.getElementById('admin-prod-color-input') as HTMLInputElement | null;
+      if (colorInp) {
+        colorInp.value = checked.join(' / ');
+      }
+    });
+  });
+
+  document.getElementById('btn-admin-add-prod-color')?.addEventListener('click', () => {
+    const colorInp = document.getElementById('admin-prod-color-input') as HTMLInputElement | null;
+    const rawVal = colorInp?.value?.trim() || state.adminArticleColorSelectedPresets.join(' / ');
+    if (!rawVal) {
+      showToast('Enter a colourway or tick colours to combine first.');
+      colorInp?.focus();
+      return;
+    }
+    state.adminArticleColorDraftOptions = normalizeColorOptionList([...state.adminArticleColorDraftOptions, rawVal]);
+    state.adminArticleColorSelectedPresets = [];
+    document.querySelectorAll<HTMLInputElement>('.su-color-preset-check').forEach(cb => {
+      cb.checked = false;
+    });
+    if (colorInp) {
+      colorInp.value = '';
+      colorInp.focus();
+    }
+    syncArticleColorChipsDom();
+  });
+
   document.getElementById('btn-admin-save-product')?.addEventListener('click', (e) => {
     const nameEl = document.getElementById('admin-prod-name') as HTMLInputElement | null;
-    const stickersEl = document.getElementById('admin-prod-stickers') as HTMLInputElement | null;
-    const cartonEl = document.getElementById('admin-prod-carton') as HTMLInputElement | null;
     const sizeFmtEl = document.getElementById('admin-prod-size-format') as HTMLSelectElement | null;
+    const colorInpEl = document.getElementById('admin-prod-color-input') as HTMLInputElement | null;
     const name = nameEl?.value?.trim() || '';
     const customerId = (document.getElementById('admin-prod-cust') as HTMLSelectElement)?.value;
     const sizeFormat = sizeFmtEl?.value || 'ALPHA_2XS_5XL';
-    const stickersPerPair = Number(stickersEl?.value || 2);
-    const pairsPerCarton = Number(cartonEl?.value || 50);
+    const pendingColor = colorInpEl?.value?.trim() || state.adminArticleColorSelectedPresets.join(' / ');
+    const colorOptions = normalizeColorOptionList([
+      ...state.adminArticleColorDraftOptions,
+      ...(pendingColor ? [pendingColor] : [])
+    ]);
 
-    const errors = validateProductMasterInputs({ name, stickersPerPair, pairsPerCarton });
-    if (applyFieldValidationErrors([
-      [nameEl, errors.name],
-      [stickersEl, errors.stickersPerPair],
-      [cartonEl, errors.pairsPerCarton]
-    ])) {
-      showToast('Review highlighted Article & BOM Master fields.');
+    const errors = validateProductMasterInputs({ name });
+    if (applyFieldValidationErrors([[nameEl, errors.name]])) {
+      showToast('Review highlighted Article Master fields.');
       return;
     }
 
@@ -81,7 +160,13 @@ export function attachAdminMasterRegistryHandlers(): void {
         const res = await fetch('/api/admin/master/product', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, customerId: customerId || 'CUST-01', sizeFormat, stickersPerPair, pairsPerCarton })
+          body: JSON.stringify({
+            name,
+            customerId: customerId || 'CUST-01',
+            sizeFormat,
+            colorSpec: colorOptions[0] || '',
+            colorOptions
+          })
         });
         const json = await res.json();
         if (!res.ok || !json.success) {
@@ -95,6 +180,10 @@ export function attachAdminMasterRegistryHandlers(): void {
         if (Array.isArray(json.data)) {
           state.adminOverview.products = json.data;
         }
+        state.adminArticleColorDraftOptions = [];
+        state.adminArticleColorSelectedPresets = [];
+        if (nameEl) nameEl.value = '';
+        if (colorInpEl) colorInpEl.value = '';
         showToast(`Article "${name}" saved to SQLite Products Master & Dropdowns.`);
         await syncBackendData();
       } catch (err) {
@@ -104,14 +193,107 @@ export function attachAdminMasterRegistryHandlers(): void {
     });
   });
 
-  document.getElementById('btn-admin-add-maker')?.addEventListener('click', () => {
-    const val = (document.getElementById('admin-add-maker-input') as HTMLInputElement)?.value?.trim();
-    if (!val) return;
-    if (!state.dropdownOptions.makers.includes(val)) {
-      state.dropdownOptions.makers.push(val);
-      showToast(`Added Maker "${val}" to global dropdowns.`);
-      renderApp();
+  document.getElementById('admin-carton-product')?.addEventListener('change', (ev) => {
+    const sel = ev.currentTarget as HTMLSelectElement;
+    const opt = sel.selectedOptions?.[0];
+    const pairsAttr = opt?.getAttribute('data-pairs-per-carton');
+    const stickersAttr = opt?.getAttribute('data-stickers-per-pair');
+    const pairsEl = document.getElementById('admin-carton-pairs') as HTMLInputElement | null;
+    const stickersEl = document.getElementById('admin-carton-stickers') as HTMLInputElement | null;
+    if (pairsEl && pairsAttr) {
+      pairsEl.value = pairsAttr;
+      clearFieldValidationError(pairsEl);
     }
+    if (stickersEl && stickersAttr) {
+      stickersEl.value = stickersAttr;
+      clearFieldValidationError(stickersEl);
+    }
+  });
+
+  document.getElementById('btn-admin-save-carton-spec')?.addEventListener('click', (e) => {
+    const prodEl = document.getElementById('admin-carton-product') as HTMLSelectElement | null;
+    const stickersEl = document.getElementById('admin-carton-stickers') as HTMLInputElement | null;
+    const pairsEl = document.getElementById('admin-carton-pairs') as HTMLInputElement | null;
+    const productId = prodEl?.value?.trim() || '';
+    const stickersPerPair = Number(stickersEl?.value || 0);
+    const pairsPerCarton = Number(pairsEl?.value || 0);
+
+    const errors = validateCartonPackingInputs({ productId, pairsPerCarton, stickersPerPair });
+    if (applyFieldValidationErrors([
+      [prodEl, errors.productId],
+      [stickersEl, errors.stickersPerPair],
+      [pairsEl, errors.pairsPerCarton]
+    ])) {
+      showToast('Review highlighted Carton & Packaging BOM fields.');
+      return;
+    }
+
+    void runAdminAction('admin:save-carton-spec', e.currentTarget as HTMLElement, async () => {
+      try {
+        const res = await fetch(`/api/admin/master/product/${encodeURIComponent(productId)}/carton`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pairsPerCarton, stickersPerPair })
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          applyFieldValidationErrors([[pairsEl, json.error || 'Packaging spec could not be updated.']]);
+          showToast(json.error || 'Packaging spec could not be updated.');
+          return;
+        }
+        if (Array.isArray(json.data)) {
+          state.adminOverview.products = json.data;
+        }
+        const artLabel = prodEl?.selectedOptions?.[0]?.textContent?.trim() || productId;
+        showToast(`Updated ${artLabel}: ${stickersPerPair} stickers/pr, ${pairsPerCarton} pairs/carton.`);
+        await syncBackendData();
+      } catch (err) {
+        console.warn(err);
+        showToast('Packaging spec could not be updated.');
+      }
+    });
+  });
+
+  document.getElementById('admin-add-maker-input')?.addEventListener('input', (e) => {
+    clearFieldValidationError(e.currentTarget as HTMLInputElement);
+  });
+
+  document.getElementById('btn-admin-add-maker')?.addEventListener('click', (e) => {
+    const input = document.getElementById('admin-add-maker-input') as HTMLInputElement | null;
+    const val = input?.value?.trim() || '';
+    if (!val) {
+      applyFieldValidationErrors([[input, 'Enter a Contractor / Maker name.']]);
+      showToast('Enter a Contractor / Maker name to register.');
+      return;
+    }
+    void runAdminAction('admin:add-maker', e.currentTarget as HTMLElement, async () => {
+      try {
+        const res = await fetch('/api/admin/makers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: val })
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success || !json.data) {
+          applyFieldValidationErrors([[input, json.error || 'Unable to add Contractor / Maker.']]);
+          showToast(json.error || 'Unable to add Contractor / Maker.');
+          return;
+        }
+        if (Array.isArray(json.data.externalMakers)) {
+          state.dropdownOptions.externalMakers = json.data.externalMakers;
+        }
+        if (Array.isArray(json.data.makers)) {
+          state.dropdownOptions.makers = json.data.makers;
+        }
+        if (input) input.value = '';
+        showToast(`Added Contractor "${json.data.name || val}" to SQLite Makers Registry.`);
+        renderApp();
+        await syncBackendData();
+      } catch (err) {
+        console.warn('Add maker failed:', err);
+        showToast('Failed to add Contractor / Maker.');
+      }
+    });
   });
 
   document.getElementById('admin-add-hall-input')?.addEventListener('input', (e) => {
@@ -157,15 +339,5 @@ export function attachAdminMasterRegistryHandlers(): void {
         showToast('Failed to add Hall.');
       }
     });
-  });
-
-  document.getElementById('btn-admin-add-po')?.addEventListener('click', () => {
-    const val = (document.getElementById('admin-add-po-input') as HTMLInputElement)?.value?.trim();
-    if (!val) return;
-    if (!state.dropdownOptions.poList.includes(val)) {
-      state.dropdownOptions.poList.push(val);
-      showToast(`Added PO #${val} to global dropdowns.`);
-      renderApp();
-    }
   });
 }

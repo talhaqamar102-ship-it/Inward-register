@@ -9,41 +9,42 @@ Never read a whole file over ~500 lines.
 |---|---:|
 | `src\appContext.ts` | 14 |
 | `src\components\authView.ts` | 169 |
-| `src\components\inwardRegisterView.ts` | 622 |
-| `src\components\packingHallView.ts` | 492 |
+| `src\components\inwardRegisterView.ts` | 671 |
+| `src\components\packingHallView.ts` | 516 |
 | `src\components\repairAndQcViews.ts` | 649 |
+| `src\components\superUser\assignRemainingModal.ts` | 337 |
 | `src\components\superUser\dashboardTab.ts` | 416 |
 | `src\components\superUser\editOrderModal.ts` | 311 |
 | `src\components\superUser\liveTrackingTab.ts` | 589 |
-| `src\components\superUser\orderCreationTab.ts` | 1008 |
-| `src\components\superUser\qcDispatchTab.ts` | 337 |
+| `src\components\superUser\orderCreationTab.ts` | 1240 |
+| `src\components\superUser\qcDispatchTab.ts` | 408 |
 | `src\components\superUser\reportsTab.ts` | 530 |
 | `src\components\superUser\shared.ts` | 418 |
 | `src\components\superUser\usersTab.ts` | 119 |
 | `src\components\superUserView.ts` | 172 |
-| `src\handlers\admin\masterRegistryHandlers.ts` | 172 |
-| `src\handlers\admin\orderCreationHandlers.ts` | 870 |
+| `src\handlers\admin\masterRegistryHandlers.ts` | 344 |
+| `src\handlers\admin\orderCreationHandlers.ts` | 1068 |
 | `src\handlers\admin\reportsAndDbHandlers.ts` | 112 |
 | `src\handlers\admin\trackingAndUsersHandlers.ts` | 102 |
-| `src\handlers\adminHandlers.ts` | 318 |
-| `src\handlers\inwardHandlers.ts` | 1006 |
+| `src\handlers\adminHandlers.ts` | 437 |
+| `src\handlers\inwardHandlers.ts` | 1071 |
 | `src\handlers\modals\documentCenterModal.ts` | 189 |
 | `src\handlers\modals\newRequisitionModal.ts` | 327 |
-| `src\handlers\packingHandlers.ts` | 637 |
+| `src\handlers\packingHandlers.ts` | 644 |
 | `src\handlers\qcDispatchHandlers.ts` | 877 |
 | `src\handlers\repairHandlers.ts` | 565 |
-| `src\handlers\windowActions.ts` | 831 |
-| `src\main.ts` | 425 |
-| `src\state\appState.ts` | 486 |
-| `src\state\syncService.ts` | 566 |
-| `src\utils\domModalsAndPrint.ts` | 472 |
-| `src\utils\requisition\analyticsAndFormValidators.ts` | 749 |
+| `src\handlers\windowActions.ts` | 800 |
+| `src\main.ts` | 441 |
+| `src\state\appState.ts` | 495 |
+| `src\state\syncService.ts` | 859 |
+| `src\utils\domModalsAndPrint.ts` | 480 |
+| `src\utils\requisition\analyticsAndFormValidators.ts` | 794 |
 | `src\utils\requisition\demoScenarios.ts` | 429 |
 | `src\utils\requisition\policyAndRbac.ts` | 455 |
-| `src\utils\requisition\sizingAndCatalog.ts` | 446 |
+| `src\utils\requisition\sizingAndCatalog.ts` | 543 |
 | `src\utils\requisition\slipBuilders.ts` | 400 |
 | `src\utils\requisition\traceabilityEngine.ts` | 1011 |
-| `src\utils\requisition\wipStageGates.ts` | 812 |
+| `src\utils\requisition\wipStageGates.ts` | 866 |
 | `src\utils\stageInputs.ts` | 44 |
 
 ## src\appContext.ts (14 lines)
@@ -64,19 +65,19 @@ Never read a whole file over ~500 lines.
 | 93–148 | 56 | fn | `renderModuleSwitcher` |
 | 150–168 | 19 | fn | `renderModalContainer` |
 
-## src\components\inwardRegisterView.ts (622 lines)
+## src\components\inwardRegisterView.ts (671 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 64–69 | 6 | fn | `formatScaleDisplayName` |
-| 71–86 | 16 | fn | `formatCompactSizeBreakdown` |
-| 88–621 | 534 | fn | `renderInwardRegisterScreen` |
+| 65–70 | 6 | fn | `formatScaleDisplayName` |
+| 72–87 | 16 | fn | `formatCompactSizeBreakdown` |
+| 89–670 | 582 | fn | `renderInwardRegisterScreen` |
 
-## src\components\packingHallView.ts (492 lines)
+## src\components\packingHallView.ts (516 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 68–491 | 424 | fn | `renderPackingHallScreen` |
+| 69–515 | 447 | fn | `renderPackingHallScreen` |
 
 ## src\components\repairAndQcViews.ts (649 lines)
 
@@ -86,6 +87,12 @@ Never read a whole file over ~500 lines.
 | 31–158 | 128 | fn | `resolveAlterationSelectionContext` |
 | 160–492 | 333 | fn | `renderRepairScreen` |
 | 494–648 | 155 | fn | `renderQcScreen` |
+
+## src\components\superUser\assignRemainingModal.ts (337 lines)
+
+| Lines | Size | Kind | Name |
+|---|---:|---|---|
+| 33–336 | 304 | fn | `openAssignRemainingOrderModal` |
 
 ## src\components\superUser\dashboardTab.ts (416 lines)
 
@@ -116,19 +123,21 @@ Never read a whole file over ~500 lines.
 | 64–145 | 82 | fn | `renderLiveTrackingMiniChart` |
 | 147–588 | 442 | fn | `renderLiveTrackingTab` |
 
-## src\components\superUser\orderCreationTab.ts (1008 lines)
+## src\components\superUser\orderCreationTab.ts (1240 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 17–1007 | 991 | fn | `renderOrderCreationTab` |
+| 19–25 | 7 | fn | `formatShortScaleBadge` |
+| 27–1239 | 1213 | fn | `renderOrderCreationTab` |
 
-## src\components\superUser\qcDispatchTab.ts (337 lines)
+## src\components\superUser\qcDispatchTab.ts (408 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
 | 21–52 | 32 | fn | `computeQcDispatchMetrics` |
-| 54–279 | 226 | fn | `renderQcDispatchTab` |
-| 281–336 | 56 | fn | `buildDispatchManifestPrintHtml` |
+| 54–56 | 3 | fn | `compareNaturalRef` |
+| 58–350 | 293 | fn | `renderQcDispatchTab` |
+| 352–407 | 56 | fn | `buildDispatchManifestPrintHtml` |
 
 ## src\components\superUser\reportsTab.ts (530 lines)
 
@@ -164,29 +173,30 @@ Never read a whole file over ~500 lines.
 |---|---:|---|---|
 | 40–171 | 132 | fn | `renderSuperUserScreen` |
 
-## src\handlers\admin\masterRegistryHandlers.ts (172 lines)
+## src\handlers\admin\masterRegistryHandlers.ts (344 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 8–171 | 164 | fn | `attachAdminMasterRegistryHandlers` |
+| 14–343 | 330 | fn | `attachAdminMasterRegistryHandlers` |
 
-## src\handlers\admin\orderCreationHandlers.ts (870 lines)
+## src\handlers\admin\orderCreationHandlers.ts (1068 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 25–59 | 35 | fn | `openEditPendingOrderModal` |
-| 61–63 | 3 | fn | `getActiveAdminOrderSizeCodes` |
-| 65–112 | 48 | fn | `syncAdminArticleLinesFromDom` |
-| 115–152 | 38 | fn | `syncAdminOrderDraftFromDom` |
-| 154–174 | 21 | fn | `updateAdminSplitBalanceDom` |
-| 176–197 | 22 | fn | `updateAdminLineSplitBalanceDom` |
-| 199–213 | 15 | fn | `updateAdminMultiTotalDom` |
-| 216–222 | 7 | fn | `recalcAdminOrderSizes` |
-| 225–869 | 645 | fn | `attachAdminOrderCreationHandlers` |
-|   ↳ 226 | | section | Section: Buyer / Article / Maker Cascade |
-|   ↳ 334 | | section | Section: Multi-Article Picker & Sub-Order Lines |
-|   ↳ 536 | | section | Section: Single-Order Contractor Split |
-|   ↳ 596 | | section | Section: Reset & Submit Order |
+| 27–61 | 35 | fn | `openEditPendingOrderModal` |
+| 63–65 | 3 | fn | `getActiveAdminOrderSizeCodes` |
+| 67–114 | 48 | fn | `syncAdminArticleLinesFromDom` |
+| 117–154 | 38 | fn | `syncAdminOrderDraftFromDom` |
+| 156–195 | 40 | fn | `updateAdminSplitBalanceDom` |
+| 197–226 | 30 | fn | `updateAdminLineSplitBalanceDom` |
+| 228–242 | 15 | fn | `updateAdminMultiTotalDom` |
+| 244–248 | 5 | fn | `syncSizeInputHighlight` |
+| 251–261 | 11 | fn | `recalcAdminOrderSizes` |
+| 264–1067 | 804 | fn | `attachAdminOrderCreationHandlers` |
+|   ↳ 265 | | section | Section: Buyer / Article / Maker Cascade |
+|   ↳ 474 | | section | Section: Multi-Article Picker & Sub-Order Lines |
+|   ↳ 703 | | section | Section: Single-Order Contractor Split |
+|   ↳ 781 | | section | Section: Reset & Submit Order |
 
 ## src\handlers\admin\reportsAndDbHandlers.ts (112 lines)
 
@@ -202,24 +212,24 @@ Never read a whole file over ~500 lines.
 | 7–69 | 63 | fn | `attachAdminTrackingHandlers` |
 | 72–101 | 30 | fn | `attachAdminUsersHandlers` |
 
-## src\handlers\adminHandlers.ts (318 lines)
+## src\handlers\adminHandlers.ts (437 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 23–317 | 295 | fn | `attachAdminHandlers` |
+| 26–436 | 411 | fn | `attachAdminHandlers` |
 
-## src\handlers\inwardHandlers.ts (1006 lines)
+## src\handlers\inwardHandlers.ts (1071 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 43–1005 | 963 | fn | `attachGRNHandlers` |
+| 43–1070 | 1028 | fn | `attachGRNHandlers` |
 |   ↳ 55 | | section | Section: Size Matrix & Split Sync |
 |   ↳ 56 | | inner fn | `syncSizesAndReceived` |
-|   ↳ 345 | | section | Section: Form Inputs & Split Controls |
-|   ↳ 393 | | section | Section: GRN Persistence & Receive Button |
-|   ↳ 394 | | inner fn | `persistAndRecordGrnBatch` |
-|   ↳ 778 | | section | Section: Requisition Issuance Queue |
-|   ↳ 945 | | section | Section: GRN Export & Summary Print |
+|   ↳ 343 | | section | Section: Form Inputs & Split Controls |
+|   ↳ 391 | | section | Section: GRN Persistence & Receive Button |
+|   ↳ 392 | | inner fn | `persistAndRecordGrnBatch` |
+|   ↳ 788 | | section | Section: Requisition Issuance Queue |
+|   ↳ 1010 | | section | Section: GRN Export & Summary Print |
 
 ## src\handlers\modals\documentCenterModal.ts (189 lines)
 
@@ -239,17 +249,17 @@ Never read a whole file over ~500 lines.
 |   ↳ 210 | | inner fn | `readRequestSizes` |
 |   ↳ 222 | | inner fn | `bindReqSizeMatrixInputs` |
 
-## src\handlers\packingHandlers.ts (637 lines)
+## src\handlers\packingHandlers.ts (644 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
 | 38–57 | 20 | fn | `recordStageDefects` |
 | 59–74 | 16 | fn | `buildCurrentMaterialRequisitionSlip` |
-| 77–636 | 560 | fn | `attachPackingHandlers` |
+| 77–643 | 567 | fn | `attachPackingHandlers` |
 |   ↳ 78 | | section | Section: Batch Switcher & Sync Banner |
-|   ↳ 126 | | section | Section: Stage 1-3 Modals |
-|   ↳ 377 | | section | Section: Material Requisition & Stage 4-5 |
-|   ↳ 580 | | section | Section: New Req, Shift Export & Labels |
+|   ↳ 118 | | section | Section: Stage 1-3 Modals |
+|   ↳ 369 | | section | Section: Material Requisition & Stage 4-5 |
+|   ↳ 588 | | section | Section: New Req, Shift Export & Labels |
 
 ## src\handlers\qcDispatchHandlers.ts (877 lines)
 
@@ -275,135 +285,140 @@ Never read a whole file over ~500 lines.
 |   ↳ 241 | | section | Section: Split Return / Scrap Modal & Row Actions |
 |   ↳ 460 | | section | Section: Defect Tag Print & Pareto Export |
 
-## src\handlers\windowActions.ts (831 lines)
+## src\handlers\windowActions.ts (800 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 83–830 | 748 | fn | `registerWindowActions` |
-|   ↳ 84 | | section | Section: Tracking & Slip Viewers |
-|   ↳ 85 | | window | `window.adminToggleOrderExpand` |
-|   ↳ 91 | | window | `window.adminSetAllOrdersExpanded` |
-|   ↳ 99 | | window | `window.adminInspectOrderInTracking` |
-|   ↳ 125 | | window | `window.adminOpenDocumentSlip` |
-|   ↳ 212 | | window | `window.adminSetTrackingBuyerFilter` |
-|   ↳ 218 | | window | `window.adminSetTrackingMakerFilter` |
-|   ↳ 224 | | window | `window.adminSetTrackingPage` |
-|   ↳ 229 | | section | Section: Demo Scenario |
-|   ↳ 230 | | window | `window.adminLoadDemo600Scenario` |
-|   ↳ 287 | | window | `window.adminLoadDemo600PairScenario` |
-|   ↳ 289 | | window | `window.adminRemoveDemo600Scenario` |
-|   ↳ 320 | | section | Section: Voids & Short-Close |
-|   ↳ 321 | | window | `window.adminVoidGrnBatch` |
-|   ↳ 351 | | window | `window.adminVoidReqBatch` |
-|   ↳ 378 | | window | `window.adminCloseOrderShort` |
-|   ↳ 409 | | section | Section: System User Management |
-|   ↳ 410 | | window | `window.adminAddSystemUser` |
-|   ↳ 459 | | window | `window.adminResetSystemUserPassword` |
-|   ↳ 509 | | window | `window.adminDeleteSystemUser` |
-|   ↳ 588 | | section | Section: Quick Order Navigation & Deletion |
-|   ↳ 589 | | window | `window.adminQuickReceiveGrnForOrder` |
-|   ↳ 648 | | window | `window.adminQuickCreateReqForOrder` |
-|   ↳ 654 | | window | `window.adminOpenReqInScreen` |
-|   ↳ 670 | | window | `window.adminRemovePendingOrder` |
-|   ↳ 703 | | window | `window.adminDeleteRecord` |
-|   ↳ 720 | | window | `window.adminRemoveDropdownItem` |
-|   ↳ 745 | | window | `window.adminForceRepair` |
-|   ↳ 766 | | section | Section: Legacy Table Row Actions |
-|   ↳ 767 | | window | `window.viewGrnRecord` |
-|   ↳ 793 | | window | `window.editGrnRecord` |
-|   ↳ 816 | | window | `window.handleDefectAction` |
-|   ↳ 820 | | window | `window.toggleQcCheck` |
+| 82–799 | 718 | fn | `registerWindowActions` |
+|   ↳ 83 | | section | Section: Tracking & Slip Viewers |
+|   ↳ 84 | | window | `window.adminToggleOrderExpand` |
+|   ↳ 90 | | window | `window.adminSetAllOrdersExpanded` |
+|   ↳ 98 | | window | `window.adminInspectOrderInTracking` |
+|   ↳ 124 | | window | `window.adminOpenDocumentSlip` |
+|   ↳ 211 | | window | `window.adminSetTrackingBuyerFilter` |
+|   ↳ 217 | | window | `window.adminSetTrackingMakerFilter` |
+|   ↳ 223 | | window | `window.adminSetTrackingPage` |
+|   ↳ 228 | | section | Section: Demo Scenario |
+|   ↳ 229 | | window | `window.adminLoadDemo600Scenario` |
+|   ↳ 286 | | window | `window.adminLoadDemo600PairScenario` |
+|   ↳ 288 | | window | `window.adminRemoveDemo600Scenario` |
+|   ↳ 319 | | section | Section: Voids & Short-Close |
+|   ↳ 320 | | window | `window.adminVoidGrnBatch` |
+|   ↳ 350 | | window | `window.adminVoidReqBatch` |
+|   ↳ 377 | | window | `window.adminCloseOrderShort` |
+|   ↳ 408 | | section | Section: System User Management |
+|   ↳ 409 | | window | `window.adminAddSystemUser` |
+|   ↳ 458 | | window | `window.adminResetSystemUserPassword` |
+|   ↳ 508 | | window | `window.adminDeleteSystemUser` |
+|   ↳ 587 | | section | Section: Quick Order Navigation & Deletion |
+|   ↳ 588 | | window | `window.adminQuickReceiveGrnForOrder` |
+|   ↳ 645 | | window | `window.adminQuickCreateReqForOrder` |
+|   ↳ 651 | | window | `window.adminOpenReqInScreen` |
+|   ↳ 665 | | window | `window.adminRemovePendingOrder` |
+|   ↳ 698 | | window | `window.adminDeleteRecord` |
+|   ↳ 715 | | window | `window.adminForceRepair` |
+|   ↳ 736 | | section | Section: Legacy Table Row Actions |
+|   ↳ 737 | | window | `window.viewGrnRecord` |
+|   ↳ 763 | | window | `window.editGrnRecord` |
+|   ↳ 785 | | window | `window.handleDefectAction` |
+|   ↳ 789 | | window | `window.toggleQcCheck` |
 
-## src\main.ts (425 lines)
+## src\main.ts (441 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 60–60 | 1 | fn | `renderAuthScreen` |
-| 61–61 | 1 | fn | `renderModuleSwitcher` |
-| 63–73 | 11 | fn | `renderScreenGRN` |
-| 78–97 | 20 | fn | `renderScreenPacking` |
-| 99–99 | 1 | fn | `renderScreenRepair` |
-| 100–100 | 1 | fn | `renderScreenQC` |
-| 105–145 | 41 | fn | `renderScreenAdmin` |
-| 150–198 | 49 | fn | `renderApp` |
-| 200–225 | 26 | fn | `initializeAuth` |
-| 227–263 | 37 | fn | `submitAuthForm` |
-| 265–285 | 21 | fn | `lockCurrentSession` |
-| 288–419 | 132 | fn | `attachEventHandlers` |
+| 64–64 | 1 | fn | `renderAuthScreen` |
+| 65–65 | 1 | fn | `renderModuleSwitcher` |
+| 67–77 | 11 | fn | `renderScreenGRN` |
+| 82–101 | 20 | fn | `renderScreenPacking` |
+| 103–103 | 1 | fn | `renderScreenRepair` |
+| 104–104 | 1 | fn | `renderScreenQC` |
+| 109–156 | 48 | fn | `renderScreenAdmin` |
+| 161–209 | 49 | fn | `renderApp` |
+| 211–239 | 29 | fn | `initializeAuth` |
+| 241–278 | 38 | fn | `submitAuthForm` |
+| 280–301 | 22 | fn | `lockCurrentSession` |
+| 304–435 | 132 | fn | `attachEventHandlers` |
 
-## src\state\appState.ts (486 lines)
+## src\state\appState.ts (495 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
 | 35–74 | 40 | fn | `createEmptyPackingWipState` |
 | 76–93 | 18 | fn | `loadSavedTailors` |
-| 246–252 | 7 | fn | `getOrderSizeCodes` |
-| 254–302 | 49 | fn | `getGrnRemainingCaps` |
-| 304–311 | 8 | fn | `formatGrnRemainingCaps` |
-| 313–319 | 7 | fn | `findHallByName` |
-| 321–330 | 10 | fn | `getTotalIssuedPairs` |
-| 332–351 | 20 | fn | `logAuditEvent` |
-| 353–443 | 91 | fn | `getOrderStockState` |
-| 445–454 | 10 | fn | `saveTailorName` |
-| 457–485 | 29 | fn | `getCurrentRollupSummary` |
+| 255–261 | 7 | fn | `getOrderSizeCodes` |
+| 263–311 | 49 | fn | `getGrnRemainingCaps` |
+| 313–320 | 8 | fn | `formatGrnRemainingCaps` |
+| 322–328 | 7 | fn | `findHallByName` |
+| 330–339 | 10 | fn | `getTotalIssuedPairs` |
+| 341–360 | 20 | fn | `logAuditEvent` |
+| 362–452 | 91 | fn | `getOrderStockState` |
+| 454–463 | 10 | fn | `saveTailorName` |
+| 466–494 | 29 | fn | `getCurrentRollupSummary` |
 
-## src\state\syncService.ts (566 lines)
-
-| Lines | Size | Kind | Name |
-|---|---:|---|---|
-| 23–25 | 3 | fn | `isPersistedRequisition` |
-| 27–40 | 14 | fn | `computeCartonCbm` |
-| 42–68 | 27 | fn | `mapServerCartons` |
-| 70–89 | 20 | fn | `applyServerRequisition` |
-| 91–115 | 25 | fn | `postWipStageUpdate` |
-| 118–122 | 5 | fn | `saveCurrentOrderWipState` |
-| 124–213 | 90 | fn | `mapServerRequisitionToWip` |
-| 216–234 | 19 | fn | `switchActiveOrder` |
-| 236–246 | 11 | fn | `applyDropdownsPayload` |
-| 248–285 | 38 | fn | `applyReceivingsPayload` |
-| 287–343 | 57 | fn | `applyAlterationsPayload` |
-| 346–565 | 220 | fn | `syncBackendData` |
-
-## src\utils\domModalsAndPrint.ts (472 lines)
+## src\state\syncService.ts (859 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 21–43 | 23 | fn | `showToast` |
-| 46–54 | 9 | fn | `getDirectPrintStage` |
-| 59–64 | 6 | fn | `resolvePendingConfirmDialog` |
-| 67–101 | 35 | fn | `openModal` |
-| 103–116 | 14 | fn | `closeModal` |
-| 119–135 | 17 | fn | `openConfirmDialog` |
-| 138–157 | 20 | fn | `confirmAndRunAdminAction` |
-| 160–184 | 25 | fn | `runAdminAction` |
-| 186–188 | 3 | fn | `findValidationErrorContainer` |
-| 190–213 | 24 | fn | `clearFieldValidationError` |
-| 215–246 | 32 | fn | `setFieldValidationError` |
-| 248–260 | 13 | fn | `applyFieldValidationErrors` |
-| 262–343 | 82 | fn | `printDocument` |
-| 352–378 | 27 | fn | `captureRenderFocusTarget` |
-| 380–404 | 25 | fn | `restoreRenderFocusTarget` |
-| 415–424 | 10 | fn | `captureDirtyFormDrafts` |
-| 426–433 | 8 | fn | `restoreDirtyFormDrafts` |
-| 436–471 | 36 | fn | `exportTableToCSV` |
+| 25–27 | 3 | fn | `isPersistedRequisition` |
+| 29–42 | 14 | fn | `computeCartonCbm` |
+| 44–70 | 27 | fn | `mapServerCartons` |
+| 72–91 | 20 | fn | `applyServerRequisition` |
+| 93–117 | 25 | fn | `postWipStageUpdate` |
+| 120–124 | 5 | fn | `saveCurrentOrderWipState` |
+| 126–231 | 106 | fn | `mapServerRequisitionToWip` |
+| 234–252 | 19 | fn | `switchActiveOrder` |
+| 254–265 | 12 | fn | `applyDropdownsPayload` |
+| 267–304 | 38 | fn | `applyReceivingsPayload` |
+| 306–362 | 57 | fn | `applyAlterationsPayload` |
+| 365–604 | 240 | fn | `syncBackendData` |
+| 611–621 | 11 | fn | `getPendingRequisitionSet` |
+| 623–632 | 10 | fn | `getIssuedRequisitionSet` |
+| 638–825 | 188 | fn | `silentRefreshHandoffs` |
+| 827–849 | 23 | fn | `startSilentHandoffPolling` |
+| 851–858 | 8 | fn | `stopSilentHandoffPolling` |
 
-## src\utils\requisition\analyticsAndFormValidators.ts (749 lines)
+## src\utils\domModalsAndPrint.ts (480 lines)
+
+| Lines | Size | Kind | Name |
+|---|---:|---|---|
+| 23–51 | 29 | fn | `showToast` |
+| 54–62 | 9 | fn | `getDirectPrintStage` |
+| 67–72 | 6 | fn | `resolvePendingConfirmDialog` |
+| 75–109 | 35 | fn | `openModal` |
+| 111–124 | 14 | fn | `closeModal` |
+| 127–143 | 17 | fn | `openConfirmDialog` |
+| 146–165 | 20 | fn | `confirmAndRunAdminAction` |
+| 168–192 | 25 | fn | `runAdminAction` |
+| 194–196 | 3 | fn | `findValidationErrorContainer` |
+| 198–221 | 24 | fn | `clearFieldValidationError` |
+| 223–254 | 32 | fn | `setFieldValidationError` |
+| 256–268 | 13 | fn | `applyFieldValidationErrors` |
+| 270–351 | 82 | fn | `printDocument` |
+| 360–386 | 27 | fn | `captureRenderFocusTarget` |
+| 388–412 | 25 | fn | `restoreRenderFocusTarget` |
+| 423–432 | 10 | fn | `captureDirtyFormDrafts` |
+| 434–441 | 8 | fn | `restoreDirtyFormDrafts` |
+| 444–479 | 36 | fn | `exportTableToCSV` |
+
+## src\utils\requisition\analyticsAndFormValidators.ts (794 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
 | 38–129 | 92 | fn | `buildRequisitionAnalyticsSeries` |
 | 131–177 | 47 | fn | `getSuperUserStatusBadgeClass` |
-| 183–524 | 342 | fn | `renderRequisitionWipAnalyticsChart` |
-| 543–576 | 34 | fn | `buildConfirmDialogHtml` |
-| 578–590 | 13 | fn | `validatePendingOrderInputs` |
-| 592–600 | 9 | fn | `validateCustomerMasterInputs` |
-| 602–618 | 17 | fn | `validateProductMasterInputs` |
-| 620–637 | 18 | fn | `validateSystemUserInputs` |
-| 639–641 | 3 | fn | `validatePasswordResetInput` |
-| 664–670 | 7 | fn | `escapeCssAttrValue` |
-| 672–677 | 6 | fn | `escapeCssIdSelector` |
-| 680–729 | 50 | fn | `buildFocusRestoreSelector` |
-| 732–747 | 16 | fn | `getDefaultStationForRole` |
+| 183–541 | 359 | fn | `renderRequisitionWipAnalyticsChart` |
+| 560–593 | 34 | fn | `buildConfirmDialogHtml` |
+| 595–607 | 13 | fn | `validatePendingOrderInputs` |
+| 609–617 | 9 | fn | `validateCustomerMasterInputs` |
+| 619–641 | 23 | fn | `validateProductMasterInputs` |
+| 643–663 | 21 | fn | `validateCartonPackingInputs` |
+| 665–682 | 18 | fn | `validateSystemUserInputs` |
+| 684–686 | 3 | fn | `validatePasswordResetInput` |
+| 709–715 | 7 | fn | `escapeCssAttrValue` |
+| 717–722 | 6 | fn | `escapeCssIdSelector` |
+| 725–774 | 50 | fn | `buildFocusRestoreSelector` |
+| 777–792 | 16 | fn | `getDefaultStationForRole` |
 
 ## src\utils\requisition\demoScenarios.ts (429 lines)
 
@@ -425,29 +440,32 @@ Never read a whole file over ~500 lines.
 | 379–428 | 50 | fn | `applyPendingOrderSelection` |
 | 430–454 | 25 | fn | `evaluateRequisitionIssuance` |
 
-## src\utils\requisition\sizingAndCatalog.ts (446 lines)
+## src\utils\requisition\sizingAndCatalog.ts (543 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 34–39 | 6 | fn | `formatSizeColumnLabel` |
-| 41–54 | 14 | fn | `getScaleSizeCodes` |
-| 56–68 | 13 | fn | `resolveScaleKeysForBreakdown` |
-| 70–73 | 4 | fn | `inferSizeFormatFromCodes` |
-| 75–80 | 6 | fn | `formatCurrentDateDDMMYYYY` |
-| 82–90 | 9 | fn | `formatSplitAllocationSummary` |
-| 92–107 | 16 | fn | `filterProductsByBuyer` |
-| 119–121 | 3 | fn | `getActiveGloveSizes` |
-| 124–132 | 9 | fn | `escapeHtml` |
-| 151–159 | 9 | fn | `parseUtcDateMidnightMs` |
-| 161–243 | 83 | fn | `computeDeliveryCountdown` |
-| 290–365 | 76 | fn | `validateContractorAllocations` |
-| 367–369 | 3 | fn | `createEmptySizes` |
-| 371–374 | 4 | fn | `normalizeBaseReqNumber` |
-| 376–378 | 3 | fn | `getMaterialReqNumber` |
-| 380–382 | 3 | fn | `getAlterationReqNumber` |
-| 384–390 | 7 | fn | `calculateSizeTotal` |
-| 392–420 | 29 | fn | `scaleSizeBreakdown` |
-| 427–445 | 19 | fn | `normalizeSuperUserTab` |
+| 42–54 | 13 | fn | `normalizeColorOptionList` |
+| 57–84 | 28 | fn | `parseProductColorOptions` |
+| 94–99 | 6 | fn | `formatSizeColumnLabel` |
+| 101–114 | 14 | fn | `getScaleSizeCodes` |
+| 116–128 | 13 | fn | `resolveScaleKeysForBreakdown` |
+| 130–133 | 4 | fn | `inferSizeFormatFromCodes` |
+| 135–140 | 6 | fn | `formatCurrentDateDDMMYYYY` |
+| 142–150 | 9 | fn | `formatSplitAllocationSummary` |
+| 152–167 | 16 | fn | `filterProductsByBuyer` |
+| 179–181 | 3 | fn | `getActiveGloveSizes` |
+| 184–192 | 9 | fn | `escapeHtml` |
+| 211–219 | 9 | fn | `parseUtcDateMidnightMs` |
+| 221–303 | 83 | fn | `computeDeliveryCountdown` |
+| 353–365 | 13 | fn | `sumContractorAllocationSizes` |
+| 367–462 | 96 | fn | `validateContractorAllocations` |
+| 464–466 | 3 | fn | `createEmptySizes` |
+| 468–471 | 4 | fn | `normalizeBaseReqNumber` |
+| 473–475 | 3 | fn | `getMaterialReqNumber` |
+| 477–479 | 3 | fn | `getAlterationReqNumber` |
+| 481–487 | 7 | fn | `calculateSizeTotal` |
+| 489–517 | 29 | fn | `scaleSizeBreakdown` |
+| 524–542 | 19 | fn | `normalizeSuperUserTab` |
 
 ## src\utils\requisition\slipBuilders.ts (400 lines)
 
@@ -473,24 +491,26 @@ Never read a whole file over ~500 lines.
 | 962–973 | 12 | fn | `parseParentOrderGroupKey` |
 | 975–1010 | 36 | fn | `groupOrderRollupsForTree` |
 
-## src\utils\requisition\wipStageGates.ts (812 lines)
+## src\utils\requisition\wipStageGates.ts (866 lines)
 
 | Lines | Size | Kind | Name |
 |---|---:|---|---|
-| 59–68 | 10 | fn | `getStartupRequisitionNumber` |
-| 70–73 | 4 | fn | `formatBatchSequence` |
-| 75–81 | 7 | fn | `isReqAwaitingFinalQc` |
-| 87–115 | 29 | fn | `canExecuteStage5CartonPacking` |
-| 117–139 | 23 | fn | `determineOrderActiveStage` |
-| 141–147 | 7 | fn | `isPackingAwaitingFinalQc` |
-| 149–153 | 5 | fn | `isStage5ReadyForCartons` |
-| 161–163 | 3 | fn | `isStage3ClearedForMaterialReq` |
-| 169–173 | 5 | fn | `isMaterialRequisitionIssuedForStage4` |
-| 179–197 | 19 | fn | `computeWipRolledYieldPct` |
-| 413–506 | 94 | fn | `computeActualStageWipPairs` |
-| 512–569 | 58 | fn | `evaluateReqReconciliation` |
-| 578–668 | 91 | fn | `evaluateOrderReconciliation` |
-| 674–811 | 138 | fn | `allocateGrnsToRequisitions` |
+| 61–70 | 10 | fn | `getStartupRequisitionNumber` |
+| 72–75 | 4 | fn | `formatBatchSequence` |
+| 77–83 | 7 | fn | `isReqAwaitingFinalQc` |
+| 89–117 | 29 | fn | `canExecuteStage5CartonPacking` |
+| 119–141 | 23 | fn | `determineOrderActiveStage` |
+| 143–149 | 7 | fn | `isPackingAwaitingFinalQc` |
+| 151–155 | 5 | fn | `isStage5ReadyForCartons` |
+| 163–187 | 25 | fn | `isPackingFloorActiveRequisition` |
+| 192–207 | 16 | fn | `getPackingFloorActiveReqNumbers` |
+| 215–217 | 3 | fn | `isStage3ClearedForMaterialReq` |
+| 223–227 | 5 | fn | `isMaterialRequisitionIssuedForStage4` |
+| 233–251 | 19 | fn | `computeWipRolledYieldPct` |
+| 467–560 | 94 | fn | `computeActualStageWipPairs` |
+| 566–623 | 58 | fn | `evaluateReqReconciliation` |
+| 632–722 | 91 | fn | `evaluateOrderReconciliation` |
+| 728–865 | 138 | fn | `allocateGrnsToRequisitions` |
 
 ## src\utils\stageInputs.ts (44 lines)
 

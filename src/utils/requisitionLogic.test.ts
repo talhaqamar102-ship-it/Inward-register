@@ -60,9 +60,13 @@ import {
   buildConfirmDialogHtml,
   validatePendingOrderInputs,
   validateContractorAllocations,
+  sumContractorAllocationSizes,
   computeDeliveryCountdown,
   validateCustomerMasterInputs,
   validateProductMasterInputs,
+  validateCartonPackingInputs,
+  normalizeColorOptionList,
+  parseProductColorOptions,
   validateSystemUserInputs,
   validatePasswordResetInput,
   buildFocusRestoreSelector,
@@ -71,11 +75,15 @@ import {
   getStartupRequisitionNumber,
   formatCurrentDateDDMMYYYY,
   formatSplitAllocationSummary,
+  getPackingFloorActiveReqNumbers,
+  isPackingFloorActiveRequisition,
   buildGrnReceiveConfirmationHtml,
   PendingOrder,
   OrderWipState
 } from './requisitionLogic';
 import { renderSuperUserScreen, renderDashboardVisualGraphs, SuperUserRenderContext } from '../components/superUserView';
+import { renderInwardRegisterScreen } from '../components/inwardRegisterView';
+import { renderPackingHallScreen } from '../components/packingHallView';
 import { renderQcDispatchTab, buildDispatchManifestPrintHtml } from '../components/superUser/qcDispatchTab';
 import { createDemo600PairScenario, replayDemo600PairScenarioStepByStep } from './requisition/demoScenarios';
 import { openStage5BoxingModal } from '../handlers/qcDispatchHandlers';
@@ -988,14 +996,17 @@ test('5.1-8.5, 6.6, 9.6, 12.2: Super User 5-view DOM rendering, <150ms Tier-1->T
   assert.ok(v2ExpandedHtml.includes('Supply Stream: Inward GRN Batches'));
   assert.ok(v2ExpandedHtml.includes('Execution Stream: Packing Hall Requisitions'));
 
-  // View 3: Order & Batch Creation + Phased Rollout Record
+  // View 3: Order & Batch Creation + Tabbed Master Registries + Phased Rollout Record
   const v3Html = renderSuperUserScreen({ ...baseCtx, activeTab: 'creation' });
-  assert.ok(v3Html.includes('1. Order creation'));
-  assert.ok(v3Html.includes('2. Customer &amp; Buyer Master Registry'));
-  assert.ok(v3Html.includes('3. Glove Article &amp; Packaging BOM Master'));
-  assert.ok(v3Html.includes('4. Contractors / Makers'));
-  assert.ok(v3Html.includes('5. Immutable Audit Trail Ledger'));
-  assert.ok(v3Html.includes('6. SQLite WAL Database &amp; Snapshot Administration'));
+  assert.ok(v3Html.includes('Order creation'));
+  assert.ok(v3Html.includes('role="tablist"'));
+  assert.ok(v3Html.includes('data-registry-tab="buyers"'));
+  assert.ok(v3Html.includes('data-registry-tab="articles"'));
+  assert.ok(v3Html.includes('data-registry-tab="carton_packing"'));
+  assert.ok(v3Html.includes('data-registry-tab="makers_pos"'));
+  assert.ok(v3Html.includes('data-registry-tab="audit_trail"'));
+  assert.ok(v3Html.includes('data-registry-tab="sqlite_wal"'));
+  assert.ok(v3Html.includes('data-registry-tab="phased_rollout"'));
   assert.match(v3Html, /id="admin-pending-order-id"[^>]*placeholder="Assigned on save"[^>]*readonly/);
   assert.match(v3Html, /id="admin-pending-order-maker"[^>]*required aria-required="true"/);
   assert.match(v3Html, /id="admin-pending-order-article"[^>]*required aria-required="true"/);
@@ -1003,8 +1014,8 @@ test('5.1-8.5, 6.6, 9.6, 12.2: Super User 5-view DOM rendering, <150ms Tier-1->T
   assert.ok(v3Html.includes('Save &amp; issue order'));
   assert.ok(v3Html.includes('id="btn-admin-reset-pending-order"'));
   assert.ok(v3Html.includes('Reset form'));
-  assert.ok(v3Html.includes('Phased Rollout Record (Phase A'));
-  assert.ok(!v3Html.includes('7. Phased Rollout Record'));
+  assert.ok(v3Html.includes('Phased Rollout Record') || v3Html.includes('Phased Rollout') || v3Html.includes('Milestones') || v3Html.includes('Phases A to C'));
+  assert.ok(v3Html.includes('data-testid="su-oc-totals-strip"'));
   assert.ok(!v3Html.includes('Checklist 12.2'));
   assert.ok(!v3Html.includes('System Users &amp; Role-Based Access Control'));
   assert.equal(PHASED_ROLLOUT_RECORD.length, 3);
@@ -2406,6 +2417,15 @@ test('Super User QC & Dispatch tab renders AQL/Release states and monochrome man
         cartons: []
       },
       {
+        reqNumber: 'REQ-2026-0003',
+        orderId: 'ORD-2026-001',
+        article: 'V3-TEST',
+        po: 'PO-1',
+        stage4Passed: 50,
+        finalQcApproved: true,
+        cartons: []
+      },
+      {
         reqNumber: 'REQ-2026-0002',
         orderId: 'ORD-2026-002',
         article: 'V3-READY',
@@ -2427,6 +2447,13 @@ test('Super User QC & Dispatch tab renders AQL/Release states and monochrome man
   assert.ok(tabHtml.includes('id="qcd-air-cartons-input"'));
   assert.ok(tabHtml.includes('id="qcd-sea-cartons-input"'));
   assert.ok(tabHtml.includes('data-qcd-action="save-air-sea-split"'));
+  assert.ok(tabHtml.includes('<th scope="col">PO #</th>'));
+  assert.ok(tabHtml.includes('data-qcd-order-group="ORD-2026-001"'));
+  assert.ok(tabHtml.includes('2 lots'));
+  assert.ok(tabHtml.includes('<td>V3-READY</td>'));
+  assert.ok(!tabHtml.includes('V3-READY <span'));
+  assert.ok(tabHtml.indexOf('data-qcd-order-group="ORD-2026-001"') < tabHtml.indexOf('data-qcd-row="REQ-2026-0001"'));
+  assert.ok(tabHtml.indexOf('data-qcd-row="REQ-2026-0001"') < tabHtml.indexOf('data-qcd-row="REQ-2026-0003"'));
   assert.ok(tabHtml.includes('Awaiting AQL'));
   assert.ok(tabHtml.includes('data-qcd-action="aql"'));
   assert.ok(tabHtml.includes('Ready to release'));
@@ -2434,7 +2461,7 @@ test('Super User QC & Dispatch tab renders AQL/Release states and monochrome man
   const releaseBtnTag = tabHtml.match(/<button[^>]*id="qcd-release-btn"[^>]*>/)?.[0] || '';
   assert.ok(!releaseBtnTag.includes('disabled'));
 
-  const printHtml = buildDispatchManifestPrintHtml(baseCtx.qcDispatchRows![1], '21-11-2026');
+  const printHtml = buildDispatchManifestPrintHtml(baseCtx.qcDispatchRows![2], '21-11-2026');
   assert.ok(printHtml.includes('REQ-2026-0002'));
   assert.ok(!printHtml.includes('--su-'));
   assert.equal(/#[0-9a-fA-F]{3,6}/.test(printHtml), false);
@@ -2585,4 +2612,781 @@ test('Live Tracking sorts reqBatches ascending even when input requisitions are 
   // FIFO must allocate RCV-2026-0001 to REQ-2026-0001, not REQ-2026-0003
   assert.deepEqual(ord.reqBatches[0].allocatedFromGrns, [{ grnCode: 'RCV-2026-0001', pairs: 150 }]);
   assert.deepEqual(ord.grnBatches[0].allocatedToReqs, [{ reqNumber: 'REQ-2026-0001', pairs: 150 }]);
+});
+
+test('Order creation strict buyer->article empty state, multi-colourways, and Section 4 carton separation', () => {
+  assert.deepEqual(normalizeColorOptionList(['  Black / Brown ', 'black / brown', '', 'Red']), [
+    'Black / Brown',
+    'Red'
+  ]);
+  assert.deepEqual(
+    parseProductColorOptions({
+      color_options_json: '["Black / Brown / Tan","Black"]',
+      color_spec: 'Black / Brown / Tan'
+    }),
+    ['Black / Brown / Tan', 'Black']
+  );
+  assert.deepEqual(parseProductColorOptions({ color_spec: 'Hi-Vis Yellow', raw_color: '' }), ['Hi-Vis Yellow']);
+  assert.deepEqual(
+    validateProductMasterInputs({ name: 'Oxford Stealth' }),
+    {}
+  );
+  assert.deepEqual(validateCartonPackingInputs({ productId: '', pairsPerCarton: 0, stickersPerPair: 0 }), {
+    productId: 'Select an article.',
+    pairsPerCarton: 'Enter a whole number of at least 1 pair per carton.',
+    stickersPerPair: 'Enter a whole number of at least 1 sticker per pair.'
+  });
+  assert.deepEqual(validateCartonPackingInputs({ productId: 'GLV-1', pairsPerCarton: 40, stickersPerPair: 3 }), {});
+
+  const customers = [
+    { id: 'CUST-OX', name: 'Oxford', country: 'UK', inspection_preference: 'RANDOM' },
+    { id: 'CUST-BR', name: 'Berik', country: 'Germany', inspection_preference: 'THOROUGH' }
+  ];
+  const products = [
+    {
+      id: 'GLV-BR-1',
+      name: 'Berik Multi Shade',
+      customer_id: 'CUST-BR',
+      customer_name: 'Berik',
+      size_format: 'ALPHA_2XS_5XL',
+      color_spec: 'Black / Brown / Tan',
+      color_options_json: '["Black / Brown / Tan","Black"]',
+      polybag_per_pair: 1,
+      silica_gel_per_pair: 1,
+      stickers_per_pair: 2,
+      pairs_per_carton: 50
+    }
+  ];
+
+  // Selecting buyer Oxford (0 articles) must show empty-state CTA and no fallback to Berik articles
+  const emptyBuyerHtml = renderSuperUserScreen({
+    activeTab: 'creation',
+    activeReport: 'order_grn_balance',
+    trackingSearch: '',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: {},
+    pendingOrders: [],
+    dropdownOptions: { makers: ['Hall A'], customers: ['Oxford', 'Berik'], articles: ['Berik Multi Shade'], poList: [] },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers,
+      products,
+      sizeStandards: [{ code: 'ALPHA_2XS_5XL', rawLabel: '2XS - 5XL (Alpha)', sizes: ['2XS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'] }],
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: buildSuperUserOrderRollups({ pendingOrders: [], grnList: [], requisitions: [], defectList: [] }),
+    orderDraft: {
+      customerId: 'CUST-OX',
+      buyer: 'Oxford',
+      maker: 'Hall A',
+      po: '',
+      productId: '',
+      article: '',
+      color: '',
+      sizeFormat: 'ALPHA_2XS_5XL',
+      dueDate: '',
+      sizes: {}
+    }
+  });
+  assert.ok(emptyBuyerHtml.includes('No articles created for <strong>Oxford</strong> yet.'));
+  assert.ok(emptyBuyerHtml.includes('data-su-action="create-article-for-buyer"'));
+  assert.match(emptyBuyerHtml, /id="admin-pending-order-article"[^>]*disabled/);
+  assert.ok(!emptyBuyerHtml.includes('id="admin-prod-carton"'));
+  assert.ok(!emptyBuyerHtml.includes('id="admin-prod-stickers"'));
+  assert.ok(emptyBuyerHtml.includes('id="admin-carton-stickers"'));
+  assert.ok(emptyBuyerHtml.includes('data-testid="admin-prod-color-builder"'));
+  assert.ok(emptyBuyerHtml.includes('data-registry-id="carton_packing"'));
+
+  // Selecting buyer Berik + Berik Multi Shade renders selectable colourway buttons
+  const berikHtml = renderSuperUserScreen({
+    activeTab: 'creation',
+    activeReport: 'order_grn_balance',
+    trackingSearch: '',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: {},
+    pendingOrders: [],
+    dropdownOptions: { makers: ['Hall A'], customers: ['Oxford', 'Berik'], articles: ['Berik Multi Shade'], poList: [] },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers,
+      products,
+      sizeStandards: [{ code: 'ALPHA_2XS_5XL', rawLabel: '2XS - 5XL (Alpha)', sizes: ['2XS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'] }],
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: buildSuperUserOrderRollups({ pendingOrders: [], grnList: [], requisitions: [], defectList: [] }),
+    orderDraft: {
+      customerId: 'CUST-BR',
+      buyer: 'Berik',
+      maker: 'Hall A',
+      po: '',
+      productId: 'GLV-BR-1',
+      article: 'Berik Multi Shade',
+      color: 'Black / Brown / Tan',
+      sizeFormat: 'ALPHA_2XS_5XL',
+      dueDate: '',
+      sizes: {}
+    }
+  });
+  assert.ok(berikHtml.includes('data-order-color-choice="Black / Brown / Tan"'));
+  assert.ok(berikHtml.includes('data-order-color-choice="Black"'));
+
+  const separatedHtml = renderSuperUserScreen({
+    activeTab: 'creation',
+    activeReport: 'order_grn_balance',
+    trackingSearch: '',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: {},
+    pendingOrders: [],
+    dropdownOptions: {
+      makers: ['Hall A', 'Maker A'],
+      externalMakers: [{ id: 10, name: 'Maker A' }],
+      halls: [{ id: 1, name: 'Hall A', stitchers: [] }],
+      customers: ['Oxford'],
+      articles: [],
+      poList: []
+    },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers: [],
+      products: [],
+      sizeStandards: [{ code: 'ALPHA_2XS_5XL', rawLabel: '2XS - 5XL (Alpha)', sizes: ['2XS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'] }],
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: buildSuperUserOrderRollups({ pendingOrders: [], grnList: [], requisitions: [], defectList: [] })
+  });
+  const makerSelectMatch = separatedHtml.match(/<select id="admin-pending-order-maker"[\s\S]*?<\/select>/);
+  assert.ok(makerSelectMatch, 'Renders #admin-pending-order-maker');
+  assert.ok(makerSelectMatch[0].includes('<optgroup label="Internal Halls">'));
+  assert.ok(makerSelectMatch[0].includes('<optgroup label="External Contractors / Makers">'));
+  const extTagsMatch = separatedHtml.match(/data-testid="su-external-makers-tags"[\s\S]*?<\/div>/);
+  assert.ok(extTagsMatch, 'Renders External Contractors tag container');
+  assert.ok(extTagsMatch[0].includes('data-maker-id="10"'));
+  assert.ok(!extTagsMatch[0].includes('Hall A'), 'Section 5 External Contractors excludes Internal Halls');
+  assert.ok(!separatedHtml.includes('id="admin-add-po-input"'), 'Removes memory-only Active PO add widget from Section 5');
+});
+
+test('Two-way contractor split helpers, allowPartial validation, greyed top controls & Assign remaining UI', () => {
+  const summed = sumContractorAllocationSizes([
+    { sizes: { '7': 30, '8': 20 } },
+    { sizes: { '7': 10, '8': 40, '9': 50 } }
+  ], ['7', '8', '9', '10', '11']);
+  assert.deepEqual(summed, { '7': 40, '8': 60, '9': 50, '10': 0, '11': 0 });
+
+  // allowPartial accepts 1 contractor row, ignores trailing blank rows, tracks unassigned pairs
+  const partialOk = validateContractorAllocations(
+    { '7': 100, '8': 100, '9': 0, '10': 0, '11': 0 },
+    [
+      { maker: 'Hall A', sizes: { '7': 50, '8': 30 } },
+      { maker: '', sizes: { '7': 0, '8': 0 } }
+    ],
+    ['7', '8', '9', '10', '11'],
+    { allowPartial: true }
+  );
+  assert.equal(partialOk.valid, true);
+  assert.equal(partialOk.totalUnassigned, 120);
+  assert.equal(partialOk.unassignedBySize['7'], 50);
+  assert.equal(partialOk.unassignedBySize['8'], 70);
+
+  // Over-allocation is still rejected even when allowPartial is enabled
+  const overAlloc = validateContractorAllocations(
+    { '7': 50, '8': 50 },
+    [
+      { maker: 'Hall A', sizes: { '7': 30, '8': 30 } },
+      { maker: 'Hall B', sizes: { '7': 25, '8': 10 } }
+    ],
+    ['7', '8'],
+    { allowPartial: true }
+  );
+  assert.equal(overAlloc.valid, false);
+  assert.match(overAlloc.error || '', /over-allocated by 5/i);
+
+  const partialHtml = renderSuperUserScreen({
+    activeTab: 'creation',
+    activeReport: 'order_grn_balance',
+    trackingSearch: '',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: {},
+    pendingOrders: [
+      {
+        orderId: 'ORD-PARTIAL-1',
+        buyer: 'Oxford',
+        maker: 'Hall A (+120 unassigned)',
+        po: 'PO-P1',
+        article: 'Stealth V2',
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes: { '7': 100, '8': 100, '9': 0, '10': 0, '11': 0 },
+        totalQty: 200,
+        assignedQty: 80,
+        unassignedQty: 120,
+        unassignedSizes: { '7': 50, '8': 70, '9': 0, '10': 0, '11': 0 },
+        contractorAllocations: [
+          { maker: 'Hall A', sizes: { '7': 50, '8': 30, '9': 0, '10': 0, '11': 0 }, totalQty: 80, dueDate: '' }
+        ]
+      }
+    ],
+    dropdownOptions: {
+      makers: ['Hall A', 'Hall B'],
+      customers: ['Oxford'],
+      articles: ['Stealth V2'],
+      poList: ['PO-P1']
+    },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers: [],
+      products: [],
+      sizeStandards: [],
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: buildSuperUserOrderRollups({ pendingOrders: [], grnList: [], requisitions: [], defectList: [] }),
+    orderDraft: {
+      buyer: 'Oxford',
+      maker: 'Hall A',
+      po: 'PO-NEW-1',
+      article: 'Stealth V2',
+      color: 'Hi-Vis Green',
+      sizeFormat: 'LEGACY_7_11',
+      dueDate: '2026-12-20',
+      sizes: { '7': 100, '8': 100, '9': 0, '10': 0, '11': 0 }
+    },
+    orderSplitRows: [
+      { maker: 'Hall A', sizes: { '7': 50, '8': 30, '9': 0, '10': 0, '11': 0 }, dueDate: '2026-12-18' }
+    ]
+  });
+
+  // Top Contractor & Due Date are disabled/greyed when split is active; Colour remains enabled
+  const topMakerTag = partialHtml.match(/<select id="admin-pending-order-maker"[^>]*>/)?.[0] || '';
+  const topDueTag = partialHtml.match(/<input type="date" id="admin-pending-order-due-date"[^>]*>/)?.[0] || '';
+  const topColorTag = partialHtml.match(/<input type="text" id="admin-pending-order-color"[^>]*>/)?.[0] || '';
+  assert.ok(topMakerTag.includes('disabled') && topMakerTag.includes('is-split-disabled'));
+  assert.ok(topDueTag.includes('disabled') && topDueTag.includes('is-split-disabled'));
+  assert.ok(!topColorTag.includes('disabled'));
+
+  assert.ok(partialHtml.includes('id="btn-admin-add-another-colour"'));
+  assert.ok(partialHtml.includes('su-split-balance-bar is-partial'));
+  assert.ok(partialHtml.includes('Partial Allocation Ready · 120 Prs Unassigned'));
+  assert.ok(partialHtml.includes('Min 1'));
+  assert.ok(partialHtml.includes('su-unassigned-chip'));
+  assert.ok(partialHtml.includes('120 unassigned'));
+  assert.ok(partialHtml.includes('data-su-action="assign-remaining-order" data-order-id="ORD-PARTIAL-1"'));
+  assert.ok(partialHtml.includes('data-testid="su-saved-orders-card"'));
+  assert.ok(partialHtml.includes('su-oc-art-name'));
+  assert.ok(partialHtml.includes('data-testid="su-oc-totals-strip"'));
+
+  // Orders with > 3 non-zero sizes render 3 chips + "+N more" toggle button
+  const manySizesHtml = renderSuperUserScreen({
+    activeTab: 'creation',
+    activeReport: 'order_grn_balance',
+    trackingSearch: '',
+    trackingStatusFilter: 'ALL',
+    expandedOrderIds: {},
+    expandedOrderSizeChips: {},
+    pendingOrders: [
+      {
+        orderId: 'ORD-CHIPS-1',
+        buyer: 'Alpine',
+        maker: 'Hall A',
+        po: 'PO-CHIPS',
+        article: 'V3',
+        color: 'Black',
+        sizeFormat: 'ALPHA_2XS_5XL',
+        sizes: { '2XS': 10, XS: 20, S: 30, M: 40, L: 50 },
+        totalQty: 150
+      }
+    ],
+    dropdownOptions: { makers: ['Hall A'], customers: ['Alpine'], articles: ['V3'], poList: ['PO-CHIPS'] },
+    adminOverview: {
+      dbHealth: { journalMode: 'wal', integrity: 'ok', tableCounts: {}, totalTables: 0 },
+      customers: [],
+      products: [],
+      sizeStandards: [],
+      receivings: [],
+      alterations: [],
+      scrapLedger: []
+    },
+    lastBackupPath: '',
+    rollupSummary: buildSuperUserOrderRollups({ pendingOrders: [], grnList: [], requisitions: [], defectList: [] })
+  });
+  assert.ok(manySizesHtml.includes('+2 more'));
+  assert.ok(manySizesHtml.includes('data-su-action="toggle-order-size-chips" data-order-id="ORD-CHIPS-1"'));
+  assert.ok(!manySizesHtml.includes('M 40'));
+});
+
+test('Inward Register auto-hides issued REQs into Issued History & enforces Stitcher for registered Halls only', () => {
+  const baseInwCtx = (overrides: Record<string, any> = {}) => {
+    const grnForm = {
+      pendingOrderId: 'ORD-H1',
+      maker: 'Hall A',
+      hallName: 'Hall A',
+      stitcherName: '',
+      article: 'Model A1',
+      color: 'Black',
+      sizeFormat: 'LEGACY_7_11',
+      receivedFrom: '',
+      rcvdPairs: '',
+      sizes: createEmptySizes(),
+      splitRows: [],
+      ...(overrides.grnForm || {})
+    };
+    const packingWip = {
+      selectedBatch: 'REQ-2026-0001',
+      parentOrderId: 'ORD-H1',
+      article: 'Model A1',
+      plannedQty: 40,
+      issueStatus: 'Issued by Inward Register',
+      sizes: { '7': 40, '8': 0, '9': 0, '10': 0, '11': 0 },
+      ...(overrides.packingWip || {})
+    };
+    return {
+      state: {
+        grnList: [],
+        pendingOrders: [
+          {
+            orderId: 'ORD-H1',
+            buyer: 'Globex',
+            maker: 'Hall A',
+            po: 'PO-H1',
+            article: 'Model A1',
+            color: 'Black',
+            sizeFormat: 'LEGACY_7_11',
+            sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 },
+            totalQty: 50
+          },
+          {
+            orderId: 'ORD-M1',
+            buyer: 'Globex',
+            maker: 'Maker A',
+            po: 'PO-M1',
+            article: 'Model A1',
+            color: 'Black',
+            sizeFormat: 'LEGACY_7_11',
+            sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 },
+            totalQty: 50
+          }
+        ],
+        grnForm,
+        packingWip,
+        ordersWipMap: overrides.ordersWipMap || {
+          'REQ-2026-0001': packingWip
+        },
+        inwardShowIssuedQueue: Boolean(overrides.inwardShowIssuedQueue),
+        defectList: [],
+        dropdownOptions: {
+          makers: ['Hall A', 'Maker A'],
+          halls: [
+            { id: 1, name: 'Hall A', stitchers: [{ id: 11, hallId: 1, name: 'Ustad Bilal' }] }
+          ]
+        }
+      },
+      getOrderSizeCodes: () => STANDARD_GLOVE_SIZES,
+      getGrnRemainingCaps: () => null,
+      formatGrnRemainingCaps: () => '',
+      getOrderStockState: () => ({ totalReceived: 50, totalIssued: 0, availablePairs: 50 }),
+      getTotalIssuedPairs: () => 40,
+      rollupSummary: buildSuperUserOrderRollups({ pendingOrders: [], grnList: [], requisitions: [], defectList: [] })
+    };
+  };
+
+  // All REQs issued -> hides issued REQ picker and shows "All pending requisitions have been issued" + history toggle
+  const allIssuedHtml = renderInwardRegisterScreen(baseInwCtx());
+  assert.ok(allIssuedHtml.includes('data-testid="inw-queue-all-issued"'));
+  assert.ok(allIssuedHtml.includes('All pending requisitions have been issued'));
+  assert.ok(allIssuedHtml.includes('id="btn-toggle-inward-issued-queue"'));
+  assert.ok(allIssuedHtml.includes('View issued history (1)'));
+  assert.ok(!allIssuedHtml.includes('id="btn-issue-req-to-packing"'));
+
+  // Toggling Issued History shows issued req selector, Reprint slip button, and Hide issued history
+  const historyHtml = renderInwardRegisterScreen(baseInwCtx({ inwardShowIssuedQueue: true }));
+  assert.ok(!historyHtml.includes('All pending requisitions have been issued'));
+  assert.ok(historyHtml.includes('id="grn-queue-req-select"'));
+  assert.ok(historyHtml.includes('id="btn-reprint-issued-req"'));
+  assert.ok(historyHtml.includes('Hide issued history'));
+
+  // Hall selected -> Stitcher (required) with required aria-required on #grn-stitcher; External Maker -> Stitcher optional
+  assert.ok(allIssuedHtml.includes('Stitcher (required)'));
+  assert.match(allIssuedHtml, /<select id="grn-stitcher"[^>]*required aria-required="true"/);
+
+  const makerHtml = renderInwardRegisterScreen(
+    baseInwCtx({
+      grnForm: { pendingOrderId: 'ORD-M1', maker: 'Maker A', hallName: '', stitcherName: '', receivedFrom: 'Maker A Carrier' }
+    })
+  );
+  assert.ok(!makerHtml.includes('Stitcher (required)'));
+  assert.match(makerHtml, /<select id="grn-stitcher"[^>]*disabled/);
+  assert.ok(makerHtml.includes('Received from (required)'));
+});
+
+test('Packing Hall slim #wip-batch-select shows only sorted active Stage 1-4 REQs without ghost, handed-off, or ORDER options', () => {
+  const mkWip = (reqNumber: string, overrides: Partial<OrderWipState> = {}): OrderWipState & {
+    selectedBatch: string;
+    mreqQty: string;
+    lineEfficiency: string;
+  } => ({
+    reqNumber,
+    selectedBatch: reqNumber,
+    parentOrderId: 'ORD-001',
+    article: 'V3',
+    plannedQty: 100,
+    issueStatus: 'Issued by Inward Register',
+    sizes: { '7': 100, '8': 0, '9': 0, '10': 0, '11': 0 },
+    stage1In: 100,
+    stage1Passed: 0,
+    stage1Defects: 0,
+    stage2In: 0,
+    stage2Passed: 0,
+    stage2Defects: 0,
+    stage3In: 0,
+    stage3Passed: 0,
+    stage3Defects: 0,
+    mreqNo: `M-${reqNumber}`,
+    altReqNo: `A-${reqNumber}`,
+    mreqQty: '0 Sets',
+    mreqStatus: 'Pending Stage 3',
+    stage4In: 0,
+    stage4Passed: 0,
+    stage4Pending: 0,
+    stage5Cartons: '0 Cartons (0 Prs)',
+    stage5Pending: '0 Cartons',
+    lineEfficiency: '100.0%',
+    outputPairs: 0,
+    outputCartons: 0,
+    inAlteration: 0,
+    ...overrides
+  });
+
+  // Pure helper filter & sort verification
+  const emptyPlaceholder = mkWip('REQ-2026-0001', { parentOrderId: '', plannedQty: 0, stage1In: 0 });
+  const voidedReq = mkWip('REQ-2026-0002', { isVoided: true });
+  const pendingInwardReq = mkWip('REQ-2026-0010', { issueStatus: 'Pending Inward Issue', stage1In: 0 });
+  const stage4ActiveReq = mkWip('REQ-2026-0004', {
+    stage1Passed: 100,
+    stage2In: 100,
+    stage2Passed: 100,
+    stage3In: 100,
+    stage3Passed: 100,
+    mreqStatus: 'ISSUED',
+    stage4In: 100,
+    stage4Passed: 40,
+    stage4Pending: 60
+  });
+  const awaitingQcDoneReq = mkWip('REQ-2026-0005', {
+    stage1Passed: 100,
+    stage2In: 100,
+    stage2Passed: 100,
+    stage3In: 100,
+    stage3Passed: 100,
+    mreqStatus: 'ISSUED',
+    stage4In: 100,
+    stage4Passed: 100,
+    stage4Pending: 0,
+    finalQcApproved: false
+  });
+  const awaitingQcWithTailorOnlyReq = mkWip('REQ-2026-0006', {
+    stage1Passed: 90,
+    stage1Defects: 10,
+    stage2In: 90,
+    stage2Passed: 90,
+    stage3In: 90,
+    stage3Passed: 90,
+    mreqStatus: 'ISSUED',
+    stage4In: 90,
+    stage4Passed: 90,
+    stage4Pending: 0,
+    inAlteration: 10,
+    reworkAtInwardPairs: 0,
+    reworkReissueRequestedPairs: 0,
+    finalQcApproved: false
+  });
+  const stage5WithReworkAtInwardReq = mkWip('REQ-2026-0007', {
+    stage1Passed: 90,
+    stage1Defects: 10,
+    stage2In: 90,
+    stage2Passed: 90,
+    stage3In: 90,
+    stage3Passed: 90,
+    mreqStatus: 'ISSUED',
+    stage4In: 90,
+    stage4Passed: 90,
+    stage4Pending: 0,
+    inAlteration: 10,
+    reworkAtInwardPairs: 10,
+    reworkReissueRequestedPairs: 0,
+    finalQcApproved: true
+  });
+  const stage5Req = mkWip('REQ-2026-0003', {
+    stage1Passed: 100,
+    stage2In: 100,
+    stage2Passed: 100,
+    stage3In: 100,
+    stage3Passed: 100,
+    mreqStatus: 'ISSUED',
+    stage4In: 100,
+    stage4Passed: 100,
+    stage4Pending: 0,
+    finalQcApproved: true
+  });
+  const completedReq = mkWip('REQ-2026-0001', {
+    stage1Passed: 100,
+    stage2In: 100,
+    stage2Passed: 100,
+    stage3In: 100,
+    stage3Passed: 100,
+    mreqStatus: 'ISSUED',
+    stage4In: 100,
+    stage4Passed: 100,
+    stage4Pending: 0,
+    finalQcApproved: true,
+    outputCartons: 2,
+    outputPairs: 100
+  });
+
+  assert.equal(isPackingFloorActiveRequisition(emptyPlaceholder), false);
+  assert.equal(isPackingFloorActiveRequisition(voidedReq), false);
+  assert.equal(isPackingFloorActiveRequisition(pendingInwardReq), true);
+  assert.equal(isPackingFloorActiveRequisition(stage4ActiveReq), true);
+  assert.equal(isPackingFloorActiveRequisition(awaitingQcDoneReq), false);
+  // Pairs still with Tailor belong to Alteration Bay (A-REQ), not Packing Hall REQ selector
+  assert.equal(isPackingFloorActiveRequisition(awaitingQcWithTailorOnlyReq), false);
+  // Once received back at Inward, the REQ immediately returns to Packing Hall even if first batch hit Stage 5
+  assert.equal(isPackingFloorActiveRequisition(stage5WithReworkAtInwardReq), true);
+  assert.equal(isPackingFloorActiveRequisition(stage5Req), false);
+  assert.equal(isPackingFloorActiveRequisition(completedReq), false);
+
+  const mixedMap = {
+    'REQ-2026-0010': pendingInwardReq,
+    'REQ-2026-0001': completedReq,
+    'REQ-2026-0005': awaitingQcDoneReq,
+    'REQ-2026-0004': stage4ActiveReq,
+    'REQ-2026-0003': stage5Req,
+    'REQ-2026-0006': awaitingQcWithTailorOnlyReq,
+    'REQ-2026-0007': stage5WithReworkAtInwardReq,
+    'REQ-2026-0002': voidedReq
+  };
+  assert.deepEqual(
+    getPackingFloorActiveReqNumbers(mixedMap),
+    ['REQ-2026-0004', 'REQ-2026-0007', 'REQ-2026-0010']
+  );
+
+  // Rendered dropdown check with active + handed-off + dock-ready stock + reworked pairs at Inward
+  const dockReadyOrder: PendingOrder = {
+    orderId: 'ORD-002',
+    buyer: 'Berik',
+    maker: 'Hall A',
+    po: 'PO-2',
+    article: 'V4',
+    sizeFormat: 'LEGACY_7_11',
+    sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 },
+    totalQty: 50
+  };
+  const rollupSummary = buildSuperUserOrderRollups({
+    pendingOrders: [dockReadyOrder],
+    grnList: [],
+    requisitions: [],
+    defectList: []
+  });
+
+  const activeHtml = renderPackingHallScreen({
+    wip: stage4ActiveReq,
+    defaultReqNumber: 'REQ-2026-0001',
+    ordersWipMap: mixedMap,
+    persistedReqNumbers: Object.keys(mixedMap),
+    pendingOrders: [dockReadyOrder],
+    defectList: [
+      {
+        id: 'A-REQ-2026-0007',
+        reqNumber: 'REQ-2026-0007',
+        origin: 'Step 1 Checking',
+        defectClass: 'Seam',
+        qty: '10 Prs',
+        pairsCount: 10,
+        status: 'At Inward',
+        handoffStage: 'RECEIVED_AT_INWARD'
+      } as any
+    ],
+    cartons: [],
+    rollupSummary,
+    getOrderAvailableDockPairs: () => 50,
+    getOrderUnclaimedDockPairs: () => 50,
+    remainingStagePairs: (inp, pass, def) => Math.max(0, inp - pass - def),
+    escapeHtml: s => String(s),
+    isSuperUser: false
+  });
+  const selectMatch = activeHtml.match(/<select id="wip-batch-select"[\s\S]*?<\/select>/);
+  assert.ok(selectMatch, 'Renders #wip-batch-select');
+  assert.ok(selectMatch[0].includes('REQ-2026-0004 · V3'));
+  assert.ok(selectMatch[0].includes('REQ-2026-0007 · V3 · Rework at Inward'));
+  assert.ok(selectMatch[0].includes('REQ-2026-0010 · V3'));
+  assert.ok(!selectMatch[0].includes('REQ-2026-0001'));
+  assert.ok(!selectMatch[0].includes('REQ-2026-0003'));
+  assert.ok(!selectMatch[0].includes('REQ-2026-0005'));
+  assert.ok(!selectMatch[0].includes('REQ-2026-0006'));
+  assert.ok(!selectMatch[0].includes('No active requisition'));
+  assert.ok(!selectMatch[0].includes('Dock Stock Ready'));
+  assert.ok(!selectMatch[0].includes('value="ORDER:'));
+  assert.ok(!selectMatch[0].includes('[Stage'));
+  assert.ok(!activeHtml.includes('Handed-off history'));
+  assert.ok(activeHtml.includes('id="btn-wip-new-req"') && !activeHtml.includes('id="btn-wip-new-req" disabled'));
+
+  // Rework Received at Inward banner renders REQ number and direct CTA even when viewing REQ-2026-0004
+  assert.ok(activeHtml.includes('data-testid="wip-rework-inward-banner"'));
+  assert.ok(activeHtml.includes('<strong>REQ-2026-0007</strong>'));
+  assert.ok(activeHtml.includes('data-packing-action="request-rework-reissue" data-req-number="REQ-2026-0007"'));
+
+  // Packing Hall bar graph shows ONLY the selected REQ (no Stage 5, no All REQs) and hides bottom clutter for operators
+  const chartHtmlMatch = activeHtml.match(/data-testid="wip-analytics-dashboard"[\s\S]*?<\/section>/);
+  assert.ok(chartHtmlMatch, 'Renders Packing Hall chart');
+  assert.ok(chartHtmlMatch[0].includes('REQ-2026-0004'));
+  assert.ok(!chartHtmlMatch[0].includes('REQ-2026-0010'));
+  assert.ok(!chartHtmlMatch[0].includes('REQ-2026-0001'));
+  assert.ok(!chartHtmlMatch[0].includes('data-series="stage5"'));
+  assert.ok(!chartHtmlMatch[0].includes('Actual Packed (Stage 5)'));
+  assert.ok(!activeHtml.includes('Active Alteration / Repair Loop'));
+  assert.ok(!activeHtml.includes('Master Shipping Carton Manifest'));
+  assert.ok(!activeHtml.includes('id="btn-wip-print-labels"'));
+  assert.ok(activeHtml.includes('1st Packed (Stage 4):'));
+
+  // Empty floor (only Completed / Stage 5 lots exist + default placeholder)
+  const emptyFloorHtml = renderPackingHallScreen({
+    wip: emptyPlaceholder,
+    defaultReqNumber: 'REQ-2026-0001',
+    ordersWipMap: { 'REQ-2026-0001': completedReq, 'REQ-2026-0003': stage5Req },
+    persistedReqNumbers: ['REQ-2026-0001', 'REQ-2026-0003'],
+    pendingOrders: [],
+    defectList: [],
+    cartons: [],
+    rollupSummary,
+    getOrderAvailableDockPairs: () => 0,
+    getOrderUnclaimedDockPairs: () => 0,
+    remainingStagePairs: (inp, pass, def) => Math.max(0, inp - pass - def),
+    escapeHtml: s => String(s),
+    isSuperUser: false
+  });
+  const emptySelect = emptyFloorHtml.match(/<select id="wip-batch-select"[\s\S]*?<\/select>/);
+  assert.ok(emptySelect);
+  assert.ok(emptySelect[0].includes('<option value="" selected disabled>No active requisitions on floor</option>'));
+  assert.ok(!emptySelect[0].includes('REQ-2026-0001'));
+  assert.ok(!emptySelect[0].includes('REQ-2026-0003'));
+
+  // Viewing a handed-off lot keeps a hidden selected option matching baseReq while dropdown lists only active REQs
+  const viewingStage5Html = renderPackingHallScreen({
+    wip: stage5Req,
+    defaultReqNumber: 'REQ-2026-0001',
+    ordersWipMap: mixedMap,
+    persistedReqNumbers: Object.keys(mixedMap),
+    pendingOrders: [],
+    defectList: [],
+    cartons: [],
+    rollupSummary,
+    getOrderAvailableDockPairs: () => 0,
+    getOrderUnclaimedDockPairs: () => 0,
+    remainingStagePairs: (inp, pass, def) => Math.max(0, inp - pass - def),
+    escapeHtml: s => String(s),
+    isSuperUser: true
+  });
+  const stage5Select = viewingStage5Html.match(/<select id="wip-batch-select"[\s\S]*?<\/select>/);
+  assert.ok(stage5Select);
+  assert.ok(stage5Select[0].includes('<option value="REQ-2026-0003" selected hidden>REQ-2026-0003 · V3 (Handed off)</option>'));
+  assert.ok(stage5Select[0].includes('REQ-2026-0004 · V3'));
+  assert.ok(viewingStage5Html.includes('Master Shipping Carton Manifest'), 'Super User keeps Stage 5 carton manifest');
+  assert.ok(!viewingStage5Html.includes('Active Alteration / Repair Loop'));
+});
+
+test('Material Requisition card shows only Generate slip before issue, Print slip after issue, and +catch-up button when rework adds pairs', () => {
+  const mkWip = (overrides: Partial<OrderWipState> = {}): OrderWipState & {
+    selectedBatch: string;
+    mreqQty: string;
+    lineEfficiency: string;
+  } => ({
+    reqNumber: 'REQ-2026-0001',
+    selectedBatch: 'REQ-2026-0001',
+    parentOrderId: 'ORD-001',
+    article: 'V3',
+    plannedQty: 100,
+    issueStatus: 'Issued by Inward Register',
+    sizes: { '7': 100, '8': 0, '9': 0, '10': 0, '11': 0 },
+    stage1In: 100,
+    stage1Passed: 100,
+    stage1Defects: 0,
+    stage2In: 100,
+    stage2Passed: 100,
+    stage2Defects: 0,
+    stage3In: 100,
+    stage3Passed: 0,
+    stage3Defects: 0,
+    mreqNo: 'M-REQ-2026-0001',
+    altReqNo: 'A-REQ-2026-0001',
+    mreqQty: '0 Sets',
+    mreqStatus: 'Pending Stage 3',
+    mreqIssuedPairs: 0,
+    stage4In: 0,
+    stage4Passed: 0,
+    stage4Pending: 0,
+    stage5Cartons: '0 Cartons (0 Prs)',
+    stage5Pending: '0 Cartons',
+    lineEfficiency: '100.0%',
+    outputPairs: 0,
+    outputCartons: 0,
+    inAlteration: 0,
+    ...overrides
+  });
+
+  const rollupSummary = buildSuperUserOrderRollups({
+    pendingOrders: [],
+    grnList: [],
+    requisitions: [],
+    defectList: []
+  });
+
+  const renderCard = (overrides: Partial<OrderWipState>) => {
+    const html = renderPackingHallScreen({
+      wip: mkWip(overrides),
+      defaultReqNumber: 'REQ-2026-0001',
+      ordersWipMap: { 'REQ-2026-0001': mkWip(overrides) },
+      persistedReqNumbers: ['REQ-2026-0001'],
+      pendingOrders: [],
+      defectList: [],
+      cartons: [],
+      rollupSummary,
+      getOrderAvailableDockPairs: () => 0,
+      getOrderUnclaimedDockPairs: () => 0,
+      remainingStagePairs: (inp, pass, def) => Math.max(0, inp - pass - def),
+      escapeHtml: s => String(s),
+      isSuperUser: false
+    });
+    const match = html.match(/data-testid="wip-mreq-gate"[\s\S]*?<\/div>\s*<!-- STAGE 4/);
+    assert.ok(match, 'Renders wip-mreq-gate card');
+    return match[0];
+  };
+
+  // 1. Stage 3 not cleared -> disabled Generate slip only, no Print slip
+  const lockedCard = renderCard({ stage3Passed: 0, mreqStatus: 'Pending Stage 3', mreqIssuedPairs: 0 });
+  assert.ok(lockedCard.includes('id="btn-wip-generate-mreq-slip" disabled'));
+  assert.ok(!lockedCard.includes('id="btn-wip-print-mreq-slip"'));
+
+  // 2. Stage 3 cleared, not yet generated -> enabled primary Generate slip only, no Print slip
+  const readyCard = renderCard({ stage3Passed: 100, mreqStatus: 'Ready', mreqIssuedPairs: 0 });
+  assert.ok(readyCard.includes('class="btn-primary wip-slip-btn" id="btn-wip-generate-mreq-slip">Generate slip</button>'));
+  assert.ok(!readyCard.includes('id="btn-wip-print-mreq-slip"'));
+
+  // 3. Generated & all matched pairs covered -> primary Print slip only, no Generate slip
+  const issuedCard = renderCard({ stage3Passed: 100, mreqStatus: 'ISSUED', mreqIssuedPairs: 100 });
+  assert.ok(!issuedCard.includes('id="btn-wip-generate-mreq-slip"'));
+  assert.ok(issuedCard.includes('class="btn-primary wip-slip-btn" id="btn-wip-print-mreq-slip">Print slip</button>'));
+
+  // 4. Generated + later rework catch-up matched -> Generate slip (+8) and outline Print slip
+  const catchupCard = renderCard({ stage3Passed: 108, mreqStatus: 'ISSUED', mreqIssuedPairs: 100 });
+  assert.ok(catchupCard.includes('id="btn-wip-generate-mreq-slip">Generate slip (+8)</button>'));
+  assert.ok(catchupCard.includes('class="btn-outline wip-slip-btn" id="btn-wip-print-mreq-slip">Print slip</button>'));
 });

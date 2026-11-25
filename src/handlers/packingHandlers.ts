@@ -79,7 +79,6 @@ export function attachPackingHandlers(): void {
   (window as any).selectWipBatchFromChart = (reqNo: string) => {
     const val = normalizeBaseReqNumber(reqNo);
     switchActiveOrder(val);
-    showToast(`Switched active requisition to ${val} (Article: ${state.packingWip.article || '---'}, Stage: ${determineOrderActiveStage(state.packingWip)})`);
     renderApp();
   };
 
@@ -101,7 +100,6 @@ export function attachPackingHandlers(): void {
       state.adminQcDispatchSelectedReq = normalizeBaseReqNumber(state.packingWip.selectedBatch);
       state.adminQcDispatchOrderFilter = '';
       renderApp();
-      showToast('Opened Super User QC & Dispatch.');
       return;
     }
     showToast('Master carton creation and QC are managed by Super User.');
@@ -110,16 +108,10 @@ export function attachPackingHandlers(): void {
   // Single Requisition select change
   document.getElementById('wip-batch-select')?.addEventListener('change', (e) => {
     const select = e.target as HTMLSelectElement;
-    if (select.value.startsWith('ORDER:')) {
-      const orderId = select.value.slice('ORDER:'.length);
-      select.value = normalizeBaseReqNumber(state.packingWip.selectedBatch);
-      openNewRequisitionModal(orderId);
-      return;
-    }
+    if (!select.value) return;
 
     const val = normalizeBaseReqNumber(select.value);
     switchActiveOrder(val);
-    showToast(`Switched active order to ${val} (Article: ${state.packingWip.article || '---'}, Stage: ${determineOrderActiveStage(state.packingWip)})`);
     renderApp();
   });
 
@@ -461,6 +453,10 @@ export function attachPackingHandlers(): void {
       showToast('Material Requisition can only be printed after Stage 3 (Pair Matching) produces matched pairs.');
       return;
     }
+    if (!isMaterialRequisitionIssuedForStage4(state.packingWip)) {
+      showToast('Generate the Material Requisition slip first before printing.');
+      return;
+    }
     const mreqId = getMaterialReqNumber(state.packingWip.selectedBatch);
     printDocument(`Material Requisition Slip — ${mreqId}`, buildCurrentMaterialRequisitionSlip());
   });
@@ -551,11 +547,13 @@ export function attachPackingHandlers(): void {
 
   // Rework Re-Issue Request (Packing Hall requests repaired pairs waiting at Inward Register under original REQ)
   let reworkReissueInFlight = false;
-  document.getElementById('btn-wip-request-rework-reissue')?.addEventListener('click', async (event) => {
+  const triggerReworkReissue = async (btn: HTMLButtonElement | null) => {
     if (reworkReissueInFlight) return;
-    const btn = event.currentTarget as HTMLButtonElement | null;
     const reqNo = normalizeBaseReqNumber(btn?.dataset.reqNumber || state.packingWip.selectedBatch);
     if (!reqNo) return;
+    if (reqNo !== normalizeBaseReqNumber(state.packingWip.selectedBatch)) {
+      switchActiveOrder(reqNo);
+    }
     reworkReissueInFlight = true;
     if (btn) btn.disabled = true;
     try {
@@ -575,6 +573,16 @@ export function attachPackingHandlers(): void {
       reworkReissueInFlight = false;
       if (btn?.isConnected) btn.disabled = false;
     }
+  };
+
+  document.getElementById('btn-wip-request-rework-reissue')?.addEventListener('click', async (event) => {
+    await triggerReworkReissue(event.currentTarget as HTMLButtonElement | null);
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-packing-action="request-rework-reissue"]').forEach(el => {
+    el.addEventListener('click', async () => {
+      await triggerReworkReissue(el);
+    });
   });
 
   // --- Section: New Req, Shift Export & Labels ---
@@ -626,7 +634,6 @@ export function attachPackingHandlers(): void {
       state.adminQcDispatchSelectedReq = normalizeBaseReqNumber(state.packingWip.selectedBatch);
       state.adminQcDispatchOrderFilter = '';
       renderApp();
-      showToast('Opened Super User QC & Dispatch.');
       return;
     }
     showToast('Master carton creation and QC are managed by Super User.');

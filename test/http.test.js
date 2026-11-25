@@ -905,7 +905,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           buyer: master.buyer,
-          maker: 'Hall A',
+          maker: 'Maker A',
           po: `PO-LOCK-${randomUUID().slice(0, 6)}`,
           article: master.article,
           color: 'Hi-Vis Neon',
@@ -923,7 +923,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         body: JSON.stringify({
           rcvDate: '31-10-2026',
           orderId,
-          makerContractor: 'Hall A',
+          makerContractor: 'Maker A',
           articleName: 'TAMPERED-ARTICLE',
           colorShade: 'TAMPERED-COLOR',
           receivedFrom: '   ',
@@ -940,7 +940,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         body: JSON.stringify({
           rcvDate: '31-10-2026',
           orderId,
-          makerContractor: 'Hall A',
+          makerContractor: 'Maker A',
           customerName: 'TAMPERED-BUYER',
           articleName: 'TAMPERED-ARTICLE',
           colorShade: 'TAMPERED-COLOR',
@@ -967,7 +967,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         body: JSON.stringify({
           rcvDate: '01-11-2026',
           orderId,
-          makerContractor: 'Hall A',
+          makerContractor: 'Maker A',
           receivedFrom: 'Bilal Driver',
           strictInwardEntry: true,
           rcvdPairs: 30
@@ -1003,7 +1003,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           buyer: master.buyer,
-          maker: 'Hall A',
+          maker: 'Maker A',
           po: `PO-ZERO-${randomUUID().slice(0, 6)}`,
           article: master.article,
           sizes: { '7': 30, '8': 0, '9': 0, '10': 0, '11': 0 },
@@ -1020,7 +1020,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         body: JSON.stringify({
           rcvDate: '24-11-2026',
           orderId,
-          makerContractor: 'Hall A',
+          makerContractor: 'Maker A',
           receivedFrom: 'Driver Zero',
           strictInwardEntry: true,
           rcvdPairs: 5,
@@ -1036,7 +1036,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         body: JSON.stringify({
           rcvDate: '24-11-2026',
           orderId,
-          makerContractor: 'Hall A',
+          makerContractor: 'Maker A',
           receivedFrom: 'Driver Zero',
           strictInwardEntry: true,
           rcvdPairs: 30,
@@ -1053,7 +1053,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         body: JSON.stringify({
           rcvDate: '24-11-2026',
           orderId,
-          makerContractor: 'Hall A',
+          makerContractor: 'Maker A',
           receivedFrom: 'Driver Zero',
           strictInwardEntry: true,
           rcvdPairs: 5,
@@ -1090,15 +1090,15 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           buyer: master.buyer,
-          maker: 'Hall A, Hall B',
+          maker: 'Maker A, Maker B',
           po: `PO-SPLIT-${randomUUID().slice(0, 6)}`,
           article: master.article,
           color: 'Black',
           sizes: { '7': 40, '8': 40, '9': 40, '10': 40, '11': 40 },
           totalQty: 200,
           allocations: [
-            { maker: 'Hall A', sizes: { '7': 25, '8': 25, '9': 25, '10': 25, '11': 20 } },
-            { maker: 'Hall B', sizes: { '7': 15, '8': 15, '9': 15, '10': 15, '11': 20 } }
+            { maker: 'Maker A', sizes: { '7': 25, '8': 25, '9': 25, '10': 25, '11': 20 } },
+            { maker: 'Maker B', sizes: { '7': 15, '8': 15, '9': 15, '10': 15, '11': 20 } }
           ]
         })
       });
@@ -1108,13 +1108,13 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       const created = orderData.orders.find(o => o.orderId === orderId);
       assert.equal(created.contractorAllocations.length, 2);
 
-      // Receive full 120 pairs for Hall A -> 200
+      // Receive full 120 pairs for Maker A -> 200
       const rcvA = await apiFetch(`${baseUrl}/api/store/receivings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           orderId,
-          makerContractor: 'Hall A',
+          makerContractor: 'Maker A',
           receivedFrom: 'Asif Carrier',
           strictInwardEntry: true,
           rcvdPairs: 120
@@ -1123,13 +1123,13 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       assert.equal(rcvA.status, 200);
       rcvNumbers.push((await rcvA.json()).data.rcv_number);
 
-      // Over-receipt for Hall A (even 10 pairs over 120) must reject 400
+      // Over-receipt for Maker A (even 10 pairs over 120) must reject 400
       const overA = await apiFetch(`${baseUrl}/api/store/receivings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           orderId,
-          makerContractor: 'Hall A',
+          makerContractor: 'Maker A',
           receivedFrom: 'Asif Carrier',
           strictInwardEntry: true,
           rcvdPairs: 10
@@ -1151,13 +1151,13 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       }, inwardCookie);
       assert.equal(wrongMaker.status, 400);
 
-      // Receive 80 pairs for Hall B -> 200 and verify updated allocations
+      // Receive 80 pairs for Maker B -> 200 and verify updated allocations
       const rcvB = await apiFetch(`${baseUrl}/api/store/receivings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           orderId,
-          makerContractor: 'Hall B',
+          makerContractor: 'Maker B',
           receivedFrom: 'Rashid Driver',
           strictInwardEntry: true,
           rcvdPairs: 80
@@ -1792,7 +1792,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
           customerId: master.customer_id,
           productId: master.product_id,
           buyer: master.buyer,
-          maker: 'Hall A',
+          maker: 'Maker A',
           po: 'PO-EDIT-001',
           article: master.article,
           color: 'Black',
@@ -1804,14 +1804,14 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
       assert.equal(orderResp.status, 200);
       orderId = (await orderResp.json()).data.orderId;
 
-      // Receive 80 pairs on size 7 for Hall A (balance starts at 120)
+      // Receive 80 pairs on size 7 for Maker A (balance starts at 120)
       const grnResp = await apiFetch(`${baseUrl}/api/store/receivings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rcvDate: '23-11-2026',
           orderId,
-          makerContractor: 'Hall A',
+          makerContractor: 'Maker A',
           receivedFrom: 'Driver Tariq',
           strictInwardEntry: true,
           orderQty: 200,
@@ -1872,7 +1872,7 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         body: JSON.stringify({
           adminPassword,
           sizes: { '7': 50, '8': 40, '9': 40, '10': 40, '11': 40 },
-          allocations: [{ maker: 'Hall A', sizes: { '7': 50, '8': 40, '9': 40, '10': 40, '11': 40 } }]
+          allocations: [{ maker: 'Maker A', sizes: { '7': 50, '8': 40, '9': 40, '10': 40, '11': 40 } }]
         })
       });
       assert.equal(shrinkSizeFail.status, 400);
@@ -1885,14 +1885,14 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
           adminPassword,
           sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 },
           allocations: [
-            { maker: 'Hall A', sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 } },
-            { maker: 'Hall B', sizes: { '7': 30, '8': 40, '9': 40, '10': 40, '11': 40 } }
+            { maker: 'Maker A', sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 } },
+            { maker: 'Maker B', sizes: { '7': 30, '8': 40, '9': 40, '10': 40, '11': 40 } }
           ]
         })
       });
       assert.equal(shrinkMakerFail.status, 400);
 
-      // 3b. Removing contractor who already has received stock (80 prs from Hall A) must return 400
+      // 3b. Removing contractor who already has received stock (80 prs from Maker A) must return 400
       const removeMakerFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1900,13 +1900,13 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
           adminPassword,
           sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 },
           allocations: [
-            { maker: 'Hall B', sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 } }
+            { maker: 'Maker B', sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 } }
           ]
         })
       });
       assert.equal(removeMakerFail.status, 400);
 
-      // 3c. Swapping Size 7 from Hall A to Hall B below Hall A's 80 received pairs on Size 7 must return 400
+      // 3c. Swapping Size 7 from Maker A to Maker B below Maker A's 80 received pairs on Size 7 must return 400
       const swapSizeBetweenMakersFail = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1914,14 +1914,14 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
           adminPassword,
           sizes: { '7': 80, '8': 40, '9': 40, '10': 40, '11': 40 },
           allocations: [
-            { maker: 'Hall A', sizes: { '7': 40, '8': 40, '9': 0, '10': 0, '11': 0 } },
-            { maker: 'Hall B', sizes: { '7': 40, '8': 0, '9': 40, '10': 40, '11': 40 } }
+            { maker: 'Maker A', sizes: { '7': 40, '8': 40, '9': 0, '10': 0, '11': 0 } },
+            { maker: 'Maker B', sizes: { '7': 40, '8': 0, '9': 40, '10': 40, '11': 40 } }
           ]
         })
       });
       assert.equal(swapSizeBetweenMakersFail.status, 400);
 
-      // 4. Valid Super User edit (increase 200 -> 260, split Hall A 140 + Hall B 120, move due date) succeeds, recalculates GRN balance, and audits
+      // 4. Valid Super User edit (increase 200 -> 260, split Maker A 140 + Maker B 120, move due date) succeeds, recalculates GRN balance, and audits
       const validEdit = await apiFetch(`${baseUrl}/api/admin/pending-orders/${orderId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -1933,8 +1933,8 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
           reason: 'Buyer added 60 pairs on size 7',
           sizes: { '7': 100, '8': 40, '9': 40, '10': 40, '11': 40 },
           allocations: [
-            { maker: 'Hall A', sizes: { '7': 100, '8': 40, '9': 0, '10': 0, '11': 0 }, dueDate: '2026-12-15' },
-            { maker: 'Hall B', sizes: { '7': 0, '8': 0, '9': 40, '10': 40, '11': 40 }, dueDate: '2026-12-15' }
+            { maker: 'Maker A', sizes: { '7': 100, '8': 40, '9': 0, '10': 0, '11': 0 }, dueDate: '2026-12-15' },
+            { maker: 'Maker B', sizes: { '7': 0, '8': 0, '9': 40, '10': 40, '11': 40 }, dueDate: '2026-12-15' }
           ]
         })
       });
@@ -1961,6 +1961,608 @@ describe('HTTP Endpoints & UI Static Files Test Suite', () => {
         db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNumber);
       }
       if (orderId && !prevOrders.includes(orderId)) {
+        db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(orderId);
+        db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(orderId);
+      }
+    }
+  });
+
+  test('API: POST /api/admin/master/product persists colorOptions and PUT /carton updates pairs_per_carton', async () => {
+    const suffix = randomUUID().slice(0, 6);
+    const custId = `CUST-CLR-${suffix}`;
+    let prodId;
+    try {
+      const custRes = await apiFetch(`${baseUrl}/api/admin/master/customer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: custId, name: `Oxford Test ${suffix}`, country: 'UK', inspectionPreference: 'RANDOM' })
+      });
+      assert.equal(custRes.status, 200);
+
+      const artName = `Oxford Multi Shade ${suffix}`;
+      const prodRes = await apiFetch(`${baseUrl}/api/admin/master/product`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: artName,
+          customerId: custId,
+          sizeFormat: 'ALPHA_2XS_5XL',
+          colorSpec: 'Black / Brown / Tan',
+          colorOptions: ['Black / Brown / Tan', 'Black', 'black']
+        })
+      });
+      assert.equal(prodRes.status, 200);
+      const prodJson = await prodRes.json();
+      assert.equal(prodJson.success, true);
+
+      const savedRow = db.prepare(`SELECT id, color_spec, raw_color, color_options_json, polybag_per_pair, silica_gel_per_pair, stickers_per_pair, pairs_per_carton FROM products WHERE name = ? AND customer_id = ?`).get(artName, custId);
+      assert.ok(savedRow);
+      prodId = savedRow.id;
+      assert.equal(savedRow.color_spec, 'Black / Brown / Tan');
+      assert.equal(savedRow.raw_color, 'Black / Brown / Tan');
+      assert.deepEqual(JSON.parse(savedRow.color_options_json), ['Black / Brown / Tan', 'Black']);
+      assert.equal(savedRow.polybag_per_pair, 1);
+      assert.equal(savedRow.silica_gel_per_pair, 1);
+      assert.equal(savedRow.stickers_per_pair, 2);
+      assert.equal(savedRow.pairs_per_carton, 50);
+
+      // Invalid pairsPerCarton (< 1) rejects with 400
+      const badCartonRes = await apiFetch(`${baseUrl}/api/admin/master/product/${encodeURIComponent(prodId)}/carton`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairsPerCarton: 0 })
+      });
+      assert.equal(badCartonRes.status, 400);
+
+      // Valid Section 4 packaging update persists pairs_per_carton + stickers_per_pair + writes audit log
+      const okCartonRes = await apiFetch(`${baseUrl}/api/admin/master/product/${encodeURIComponent(prodId)}/carton`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairsPerCarton: 40, stickersPerPair: 3 })
+      });
+      assert.equal(okCartonRes.status, 200);
+      const okJson = await okCartonRes.json();
+      assert.equal(okJson.success, true);
+
+      const updatedRow = db.prepare(`SELECT pairs_per_carton, stickers_per_pair FROM products WHERE id = ?`).get(prodId);
+      assert.equal(updatedRow.pairs_per_carton, 40);
+      assert.equal(updatedRow.stickers_per_pair, 3);
+
+      const auditEntry = db.prepare(`SELECT action, after_summary FROM audit_trail WHERE entity_id = ? AND action = 'PRODUCT_CARTON_UPDATE'`).get(prodId);
+      assert.ok(auditEntry);
+      assert.match(auditEntry.after_summary, /40 prs\/ctn/);
+    } finally {
+      if (prodId) db.prepare('DELETE FROM products WHERE id = ?').run(prodId);
+      db.prepare('DELETE FROM customers WHERE id = ?').run(custId);
+    }
+  });
+
+  test('API Makers CRUD: SQLite persistence, RBAC 403, Hall separation vs combined dropdowns, and permanent delete', async () => {
+    const makerName = `Ext Stitcher ${randomUUID().slice(0, 6)}`;
+    let makerId;
+    try {
+      // Non-admin role cannot create maker (403)
+      const rbacFail = await apiFetch(`${baseUrl}/api/admin/makers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: makerName })
+      }, inwardCookie);
+      assert.equal(rbacFail.status, 403);
+
+      // Creating a maker colliding with an existing Hall name returns 409
+      const hallCollision = await apiFetch(`${baseUrl}/api/admin/makers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Hall A' })
+      });
+      assert.equal(hallCollision.status, 409);
+
+      // Valid creation persists in SQLite makers table + audit trail
+      const createRes = await apiFetch(`${baseUrl}/api/admin/makers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: makerName })
+      });
+      assert.equal(createRes.status, 200);
+      const createJson = await createRes.json();
+      assert.equal(createJson.success, true);
+      makerId = createJson.data.id;
+      assert.ok(Number.isInteger(makerId) && makerId > 0);
+      assert.ok(createJson.data.externalMakers.some(m => m.id === makerId && m.name === makerName));
+      assert.ok(createJson.data.makers.includes(makerName));
+
+      // Duplicate (case-insensitive) rejects with 409
+      const dupRes = await apiFetch(`${baseUrl}/api/admin/makers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: makerName.toLowerCase() })
+      });
+      assert.equal(dupRes.status, 409);
+
+      // GET /api/store/dropdowns returns externalMakers separately from halls, and combined list in makers
+      const dropRes = await apiFetch(`${baseUrl}/api/store/dropdowns`);
+      assert.equal(dropRes.status, 200);
+      const dropData = (await dropRes.json()).data;
+      assert.ok(dropData.externalMakers.some(m => m.name === makerName));
+      assert.ok(!dropData.externalMakers.some(m => m.name === 'Hall A'));
+      assert.ok(dropData.makers.includes('Hall A'));
+      assert.ok(dropData.makers.includes(makerName));
+
+      // Deleting removes permanently even if historical store_receivings ever existed
+      const delRes = await apiFetch(`${baseUrl}/api/admin/makers/${makerId}`, {
+        method: 'DELETE'
+      });
+      assert.equal(delRes.status, 200);
+      const delJson = await delRes.json();
+      assert.equal(delJson.success, true);
+      assert.equal(delJson.data.deleted, true);
+      assert.ok(!delJson.data.externalMakers.some(m => m.id === makerId));
+      assert.ok(!delJson.data.makers.includes(makerName));
+      makerId = null;
+
+      // Re-fetching dropdowns confirms deleted maker stays gone (does not snap back)
+      const dropAfter = await apiFetch(`${baseUrl}/api/store/dropdowns`);
+      const dropAfterData = (await dropAfter.json()).data;
+      assert.ok(!dropAfterData.externalMakers.some(m => m.name === makerName));
+      assert.ok(!dropAfterData.makers.includes(makerName));
+
+      const createAudit = db.prepare(`SELECT action FROM audit_trail WHERE entity_id = ? AND action = 'MAKER_CREATE'`).get(makerName);
+      const deleteAudit = db.prepare(`SELECT action FROM audit_trail WHERE entity_id = ? AND action = 'MAKER_DELETE'`).get(makerName);
+      assert.ok(createAudit);
+      assert.ok(deleteAudit);
+    } finally {
+      if (makerId) {
+        db.prepare('DELETE FROM makers WHERE id = ?').run(makerId);
+      }
+    }
+  });
+
+  test('Partial order contractor split: saves unassigned balance, caps Inward GRN, and Assign Remaining splits remainder cleanly', async () => {
+    const master = db.prepare(`
+      SELECT c.id AS customerId, c.name AS buyer, p.id AS productId, p.name AS article
+      FROM customers c JOIN products p ON p.customer_id = c.id
+      WHERE p.size_format = 'LEGACY_7_11'
+      LIMIT 1
+    `).get();
+    assert.ok(master);
+    let orderId;
+    const rcvNumbers = [];
+    try {
+      // Create 200-pair order with only 80 pairs assigned to Hall A (120 unassigned)
+      const createRes = await apiFetch(`${baseUrl}/api/admin/pending-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: master.customerId,
+          buyer: master.buyer,
+          maker: 'Hall A',
+          po: 'PO-PARTIAL-HTTP',
+          productId: master.productId,
+          article: master.article,
+          color: 'Hi-Vis Green',
+          sizeFormat: 'LEGACY_7_11',
+          sizes: { '7': 100, '8': 100, '9': 0, '10': 0, '11': 0 },
+          totalQty: 200,
+          allowPartialAllocation: true,
+          allocations: [
+            { maker: 'Hall A', sizes: { '7': 50, '8': 30, '9': 0, '10': 0, '11': 0 }, dueDate: '2026-12-20' }
+          ]
+        })
+      });
+      assert.equal(createRes.status, 200);
+      const createJson = await createRes.json();
+      assert.equal(createJson.success, true);
+      orderId = createJson.data.orderId;
+
+      const createdOrder = createJson.data.orders.find(o => o.orderId === orderId);
+      assert.ok(createdOrder);
+      assert.equal(createdOrder.totalQty, 200);
+      assert.equal(createdOrder.assignedQty, 80);
+      assert.equal(createdOrder.unassignedQty, 120);
+      assert.equal(createdOrder.unassignedSizes['7'], 50);
+      assert.equal(createdOrder.unassignedSizes['8'], 70);
+
+      // Unassigned contractor (Hall B) cannot receive against unassigned pairs
+      const unallocGrn = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          makerContractor: 'Hall B',
+          customerName: master.buyer,
+          poNumber: 'PO-PARTIAL-HTTP',
+          articleName: master.article,
+          colorShade: 'Hi-Vis Green',
+          orderQty: 200,
+          rcvdPairs: 10,
+          sizes: [{ sizeCode: '7', orderPairs: 100, rcvdPairs: 10 }]
+        })
+      }, inwardCookie);
+      assert.equal(unallocGrn.status, 400);
+
+      // Hall A cannot exceed its total assigned cap (80) even without strictInwardEntry
+      const overTotalCapGrn = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          makerContractor: 'Hall A',
+          customerName: master.buyer,
+          poNumber: 'PO-PARTIAL-HTTP',
+          articleName: master.article,
+          colorShade: 'Hi-Vis Green',
+          orderQty: 200,
+          rcvdPairs: 85,
+          sizes: [
+            { sizeCode: '7', orderPairs: 50, rcvdPairs: 50 },
+            { sizeCode: '8', orderPairs: 30, rcvdPairs: 35 }
+          ]
+        })
+      }, inwardCookie);
+      assert.equal(overTotalCapGrn.status, 400);
+
+      // Hall A cannot exceed its size-7 cap (50) when strictInwardEntry is enabled even if 60 <= total 80
+      const overSizeCapGrn = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          makerContractor: 'Hall A',
+          receivedFrom: 'Driver Ali',
+          strictInwardEntry: true,
+          customerName: master.buyer,
+          poNumber: 'PO-PARTIAL-HTTP',
+          articleName: master.article,
+          colorShade: 'Hi-Vis Green',
+          orderQty: 200,
+          rcvdPairs: 60,
+          sizes: [{ sizeCode: '7', orderPairs: 50, rcvdPairs: 60 }]
+        })
+      }, inwardCookie);
+      assert.equal(overSizeCapGrn.status, 400);
+
+      // Hall A receives within cap (50 of size 7)
+      const okHallAGrn = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          makerContractor: 'Hall A',
+          customerName: master.buyer,
+          poNumber: 'PO-PARTIAL-HTTP',
+          articleName: master.article,
+          colorShade: 'Hi-Vis Green',
+          orderQty: 200,
+          rcvdPairs: 50,
+          sizes: [{ sizeCode: '7', orderPairs: 50, rcvdPairs: 50 }]
+        })
+      }, inwardCookie);
+      assert.equal(okHallAGrn.status, 200);
+      rcvNumbers.push((await okHallAGrn.json()).data.rcv_number);
+
+      // Over-assigning remaining balance fails cleanly with 400
+      const overAssignRes = await apiFetch(`${baseUrl}/api/admin/pending-orders/${encodeURIComponent(orderId)}/assign-remaining`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          allocations: [
+            { maker: 'Hall B', sizes: { '7': 60, '8': 10 } }
+          ]
+        })
+      });
+      assert.equal(overAssignRes.status, 400);
+
+      // Assign the remaining 120 pairs across Hall B (70) and Maker A (50)
+      const assignRes = await apiFetch(`${baseUrl}/api/admin/pending-orders/${encodeURIComponent(orderId)}/assign-remaining`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          allocations: [
+            { maker: 'Hall B', sizes: { '7': 30, '8': 40 }, dueDate: '2026-12-22' },
+            { maker: 'Maker A', sizes: { '7': 20, '8': 30 }, dueDate: '2026-12-23' }
+          ],
+          reason: 'Phase 2 split'
+        })
+      });
+      assert.equal(assignRes.status, 200);
+      const assignJson = await assignRes.json();
+      assert.equal(assignJson.success, true);
+      assert.equal(assignJson.data.newlyAssignedPairs, 120);
+      assert.equal(assignJson.data.remainingUnassignedPairs, 0);
+
+      const fullyAssigned = assignJson.data.orders.find(o => o.orderId === orderId);
+      assert.equal(fullyAssigned.assignedQty, 200);
+      assert.equal(fullyAssigned.unassignedQty, 0);
+      assert.equal(fullyAssigned.contractorAllocations.length, 3);
+
+      const assignAudit = db.prepare(`SELECT action, after_summary FROM audit_trail WHERE entity_id = ? AND action = 'ORDER_ASSIGN_REMAINING'`).get(orderId);
+      assert.ok(assignAudit);
+      assert.match(assignAudit.after_summary, /\+120 Prs \[Hall B \(70\), Maker A \(50\)\]/);
+
+      // Hall B can now receive within its newly assigned 30/40 cap
+      const okHallBGrn = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          makerContractor: 'Hall B',
+          customerName: master.buyer,
+          poNumber: 'PO-PARTIAL-HTTP',
+          articleName: master.article,
+          colorShade: 'Hi-Vis Green',
+          orderQty: 200,
+          rcvdPairs: 30,
+          sizes: [{ sizeCode: '7', orderPairs: 30, rcvdPairs: 30 }]
+        })
+      }, inwardCookie);
+      assert.equal(okHallBGrn.status, 200);
+      rcvNumbers.push((await okHallBGrn.json()).data.rcv_number);
+    } finally {
+      for (const rcv of rcvNumbers) {
+        db.prepare('DELETE FROM receiving_size_breakdowns WHERE rcv_number = ?').run(rcv);
+        db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcv);
+      }
+      if (orderId) {
+        db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(orderId);
+        db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(orderId);
+      }
+    }
+  });
+
+  test('Inward Dock Hall strict stitcher gate: requires Stitcher for registered Halls even when hallName is omitted, allows External Makers without Stitcher', async () => {
+    const suffix = randomUUID().slice(0, 6);
+    const hallName = `Hall Gate ${suffix}`;
+    const stitcherName = `Ustad Strict ${suffix}`;
+    const master = db.prepare(`
+      SELECT c.id AS customerId, c.name AS buyer, p.id AS productId, p.name AS article
+      FROM customers c JOIN products p ON p.customer_id = c.id
+      WHERE p.size_format = 'LEGACY_7_11'
+      LIMIT 1
+    `).get();
+    assert.ok(master);
+
+    let hallId;
+    let hallOrderId;
+    let extOrderId;
+    const rcvNumbers = [];
+    try {
+      const hRes = await apiFetch(`${baseUrl}/api/admin/halls`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: hallName })
+      });
+      assert.equal(hRes.status, 200);
+      hallId = (await hRes.json()).data.id;
+
+      const sRes = await apiFetch(`${baseUrl}/api/admin/halls/${hallId}/stitchers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: stitcherName })
+      });
+      assert.equal(sRes.status, 200);
+
+      const hallOrderRes = await apiFetch(`${baseUrl}/api/admin/pending-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: master.customerId,
+          buyer: master.buyer,
+          maker: hallName,
+          po: `PO-HALL-GATE-${suffix}`,
+          productId: master.productId,
+          article: master.article,
+          color: 'Black',
+          sizeFormat: 'LEGACY_7_11',
+          sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 },
+          totalQty: 50
+        })
+      });
+      assert.equal(hallOrderRes.status, 200);
+      hallOrderId = (await hallOrderRes.json()).data.orderId;
+
+      // Receiving for Hall order without stitcherName rejects 400 even when hallName is omitted
+      const noStitcherRes = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: hallOrderId,
+          makerContractor: hallName,
+          receivedFrom: 'Hall Carrier',
+          strictInwardEntry: true,
+          customerName: master.buyer,
+          poNumber: `PO-HALL-GATE-${suffix}`,
+          articleName: master.article,
+          colorShade: 'Black',
+          orderQty: 50,
+          rcvdPairs: 25,
+          sizes: [{ sizeCode: '7', orderPairs: 50, rcvdPairs: 25 }]
+        })
+      }, inwardCookie);
+      assert.equal(noStitcherRes.status, 400);
+      const noStitcherJson = await noStitcherRes.json();
+      assert.match(noStitcherJson.error || '', /Stitcher is required/i);
+
+      // Receiving for Hall order WITH hallName & stitcherName succeeds (200)
+      const withStitcherRes = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: hallOrderId,
+          makerContractor: hallName,
+          hallName,
+          stitcherName,
+          receivedFrom: `${stitcherName} (${hallName})`,
+          strictInwardEntry: true,
+          customerName: master.buyer,
+          poNumber: `PO-HALL-GATE-${suffix}`,
+          articleName: master.article,
+          colorShade: 'Black',
+          orderQty: 50,
+          rcvdPairs: 25,
+          sizes: [{ sizeCode: '7', orderPairs: 50, rcvdPairs: 25 }]
+        })
+      }, inwardCookie);
+      assert.equal(withStitcherRes.status, 200);
+      rcvNumbers.push((await withStitcherRes.json()).data.rcv_number);
+
+      // External Maker order succeeds without any stitcher
+      const extOrderRes = await apiFetch(`${baseUrl}/api/admin/pending-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: master.customerId,
+          buyer: master.buyer,
+          maker: 'Maker A',
+          po: `PO-EXT-GATE-${suffix}`,
+          productId: master.productId,
+          article: master.article,
+          color: 'Black',
+          sizeFormat: 'LEGACY_7_11',
+          sizes: { '7': 40, '8': 0, '9': 0, '10': 0, '11': 0 },
+          totalQty: 40
+        })
+      });
+      assert.equal(extOrderRes.status, 200);
+      extOrderId = (await extOrderRes.json()).data.orderId;
+
+      const extGrnRes = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: extOrderId,
+          makerContractor: 'Maker A',
+          receivedFrom: 'Maker A Carrier',
+          strictInwardEntry: true,
+          customerName: master.buyer,
+          poNumber: `PO-EXT-GATE-${suffix}`,
+          articleName: master.article,
+          colorShade: 'Black',
+          orderQty: 40,
+          rcvdPairs: 40,
+          sizes: [{ sizeCode: '7', orderPairs: 40, rcvdPairs: 40 }]
+        })
+      }, inwardCookie);
+      assert.equal(extGrnRes.status, 200);
+      rcvNumbers.push((await extGrnRes.json()).data.rcv_number);
+    } finally {
+      for (const rcv of rcvNumbers) {
+        db.prepare('DELETE FROM receiving_size_breakdowns WHERE rcv_number = ?').run(rcv);
+        db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcv);
+      }
+      for (const oid of [hallOrderId, extOrderId]) {
+        if (oid) {
+          db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(oid);
+          db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(oid);
+        }
+      }
+      if (hallId) {
+        db.prepare('DELETE FROM halls WHERE id = ?').run(hallId);
+      }
+    }
+  });
+
+  test('API: GET /api/sync/stamp requires auth, stays stable on idle, and changes on GRN/REQ handoffs', async () => {
+    // Anonymous request rejected with 401
+    const anonRes = await fetch(`${baseUrl}/api/sync/stamp`);
+    assert.equal(anonRes.status, 401);
+
+    const master = db.prepare(`
+      SELECT c.id AS customerId, c.name AS buyer, p.id AS productId, p.name AS article
+      FROM customers c JOIN products p ON p.customer_id = c.id
+      WHERE p.size_format = 'LEGACY_7_11'
+      LIMIT 1
+    `).get();
+    assert.ok(master);
+
+    let orderId;
+    let rcvNumber;
+    let reqNumber;
+    try {
+      const s1Res = await apiFetch(`${baseUrl}/api/sync/stamp`, {}, inwardCookie);
+      assert.equal(s1Res.status, 200);
+      const s1Json = await s1Res.json();
+      assert.equal(s1Json.success, true);
+      assert.ok(typeof s1Json.data?.stamp === 'string' && s1Json.data.stamp.length > 0);
+
+      // Consecutive idle check returns identical stamp
+      const s2Res = await apiFetch(`${baseUrl}/api/sync/stamp`, {}, packingCookie);
+      assert.equal(s2Res.status, 200);
+      const s2Json = await s2Res.json();
+      assert.equal(s2Json.data.stamp, s1Json.data.stamp);
+
+      // Order creation changes stamp
+      const ordRes = await apiFetch(`${baseUrl}/api/admin/pending-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: master.customerId,
+          buyer: master.buyer,
+          maker: 'Maker A',
+          po: `PO-STAMP-${randomUUID().slice(0, 6)}`,
+          productId: master.productId,
+          article: master.article,
+          color: 'Black',
+          sizeFormat: 'LEGACY_7_11',
+          sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 },
+          totalQty: 50
+        })
+      });
+      assert.equal(ordRes.status, 200);
+      orderId = (await ordRes.json()).data.orderId;
+      const s3Stamp = (await (await apiFetch(`${baseUrl}/api/sync/stamp`, {}, inwardCookie)).json()).data.stamp;
+      assert.notEqual(s3Stamp, s1Json.data.stamp);
+
+      // Inward GRN changes stamp
+      const grnRes = await apiFetch(`${baseUrl}/api/store/receivings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId,
+          makerContractor: 'Maker A',
+          receivedFrom: 'Stamp Driver',
+          customerName: master.buyer,
+          poNumber: orderId,
+          articleName: master.article,
+          orderQty: 50,
+          rcvdPairs: 50
+        })
+      }, inwardCookie);
+      assert.equal(grnRes.status, 200);
+      rcvNumber = (await grnRes.json()).data.rcv_number;
+      const s4Stamp = (await (await apiFetch(`${baseUrl}/api/sync/stamp`, {}, packingCookie)).json()).data.stamp;
+      assert.notEqual(s4Stamp, s3Stamp);
+
+      // Packing Hall REQ creation changes stamp
+      const reqRes = await apiFetch(`${baseUrl}/api/orders/${encodeURIComponent(orderId)}/requisitions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 } })
+      }, packingCookie);
+      assert.equal(reqRes.status, 200);
+      reqNumber = (await reqRes.json()).data.reqNumber;
+      const s5Stamp = (await (await apiFetch(`${baseUrl}/api/sync/stamp`, {}, inwardCookie)).json()).data.stamp;
+      assert.notEqual(s5Stamp, s4Stamp);
+
+      // Inward issuance changes stamp
+      const issueRes = await apiFetch(`${baseUrl}/api/orders/${encodeURIComponent(orderId)}/issue-req`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reqNumber, requestedPairs: 50 })
+      }, inwardCookie);
+      assert.equal(issueRes.status, 200);
+      const s6Stamp = (await (await apiFetch(`${baseUrl}/api/sync/stamp`, {}, packingCookie)).json()).data.stamp;
+      assert.notEqual(s6Stamp, s5Stamp);
+    } finally {
+      if (reqNumber) {
+        db.prepare('DELETE FROM packing_wip WHERE req_number = ?').run(reqNumber);
+        db.prepare('DELETE FROM grn_req_allocations WHERE req_number = ?').run(reqNumber);
+        db.prepare('DELETE FROM glove_requisitions WHERE req_number = ?').run(reqNumber);
+      }
+      if (rcvNumber) {
+        db.prepare('DELETE FROM receiving_size_breakdowns WHERE rcv_number = ?').run(rcvNumber);
+        db.prepare('DELETE FROM store_receivings WHERE rcv_number = ?').run(rcvNumber);
+      }
+      if (orderId) {
         db.prepare('DELETE FROM order_contractor_allocations WHERE order_id = ?').run(orderId);
         db.prepare('DELETE FROM pending_orders WHERE order_id = ?').run(orderId);
       }

@@ -43,6 +43,7 @@ export interface InwardRegisterStateShape {
   };
   packingWip: Record<string, any>;
   ordersWipMap: Record<string, any>;
+  inwardShowIssuedQueue?: boolean;
   defectList?: Array<Record<string, any>>;
   dropdownOptions: {
     makers: string[];
@@ -137,22 +138,32 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
         }
       : null;
   const wip = state.packingWip;
-  const baseReq = normalizeBaseReqNumber(wip.selectedBatch);
+  const totalIssuedPairs = getTotalIssuedPairs();
+  const nonVoidReqs = Object.values(state.ordersWipMap).filter(
+    (item: any) => item && !item.isVoided && Number(item.plannedQty || calculateSizeTotal(item.sizes) || 0) > 0
+  );
+  const pendingQueueList = nonVoidReqs.filter((item: any) => item.issueStatus !== 'Issued by Inward Register');
+  const issuedQueueList = nonVoidReqs.filter((item: any) => item.issueStatus === 'Issued by Inward Register');
+  const showIssuedHistory = Boolean(state.inwardShowIssuedQueue) && issuedQueueList.length > 0;
+  const activeQueueList = showIssuedHistory ? issuedQueueList : pendingQueueList;
+  const selectedWipCode = normalizeBaseReqNumber(wip.selectedBatch);
+  const activeQueueReq = activeQueueList.find(
+    (item: any) => normalizeBaseReqNumber(item.selectedBatch || item.reqNumber) === selectedWipCode
+  ) || activeQueueList[0] || null;
+  const displayReq = activeQueueReq || wip;
+  const baseReq = normalizeBaseReqNumber(displayReq.selectedBatch || displayReq.reqNumber);
   const mReq = getMaterialReqNumber(baseReq);
   const aReq = getAlterationReqNumber(baseReq);
-  const askingPairs = wip.plannedQty || calculateSizeTotal(wip.sizes);
-  const orderStock = getOrderStockState(wip.parentOrderId || '');
+  const askingPairs = activeQueueReq ? (displayReq.plannedQty || calculateSizeTotal(displayReq.sizes)) : 0;
+  const orderStock = getOrderStockState(displayReq.parentOrderId || '');
   const evalIssue = evaluateRequisitionIssuance({
     askingPairs,
-    askingSizes: wip.sizes,
+    askingSizes: displayReq.sizes,
     totalReceivedPairs: orderStock.totalReceived,
     alreadyIssuedPairs: orderStock.totalIssued
   });
-  const totalIssuedPairs = getTotalIssuedPairs();
-  const queueReqs = Object.values(state.ordersWipMap).filter((item: any) => item && !item.isVoided);
-  const activeQueueList = queueReqs.length > 0 ? queueReqs : [wip];
-  const wipCodes = resolveScaleKeysForBreakdown(wip.sizes, (wip as any).sizeCodes);
-  const isReqIssued = askingPairs > 0 && wip.issueStatus === 'Issued by Inward Register';
+  const wipCodes = resolveScaleKeysForBreakdown(displayReq.sizes, (displayReq as any).sizeCodes);
+  const isReqIssued = askingPairs > 0 && displayReq.issueStatus === 'Issued by Inward Register';
 
   return `
     <div class="inw" data-testid="inward-register-screen">
@@ -254,7 +265,7 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                 <label class="inw-label" for="grn-stitcher">
                   Stitcher${hallSelected ? ' (required)' : ''}
                 </label>
-                <select id="grn-stitcher" class="inw-control" ${hallActiveWithStitchers ? '' : 'disabled'}>
+                <select id="grn-stitcher" class="inw-control" ${hallActiveWithStitchers ? 'required aria-required="true"' : 'disabled'}>
                   ${
                     !hallSelected
                       ? `<option value="">Select a hall first</option>`
@@ -265,26 +276,26 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                 </select>
                 <div class="inward-field-hint">
                   ${hallSelected && !hallActiveWithStitchers
-                    ? `Add stitchers in Super User master data, registry 04`
+                    ? `Add stitchers in Super User &rarr; Master registries &rarr; Makers &amp; halls before receiving.`
                     : (hallActiveWithStitchers
-                        ? `Filtered to ${escapeHtml(activeHall!.name)}`
-                        : 'Enabled when a hall is selected')}
+                        ? `Required for ${escapeHtml(activeHall!.name)}`
+                        : 'Required only when receiving from a registered hall')}
                 </div>
               </div>
               <div class="form-group">
                 <label class="inw-label" for="grn-received-from">
-                  ${hallActiveWithStitchers ? 'Received from (optional)' : 'Received from (required)'}
+                  ${hallSelected ? 'Received from (optional)' : 'Received from (required)'}
                 </label>
                 <input
                   type="text"
                   id="grn-received-from"
                   class="inw-control"
-                  placeholder="${hallActiveWithStitchers ? 'Optional courier or note' : 'Person or courier name'}"
+                  placeholder="${hallSelected ? 'Optional courier or note' : 'Person or courier name'}"
                   value="${escapeHtml(state.grnForm.receivedFrom)}"
-                  ${hallActiveWithStitchers ? '' : 'required aria-required="true"'}
+                  ${hallSelected ? '' : 'required aria-required="true"'}
                 />
                 <div class="inward-field-hint" id="grn-note-hint">
-                  ${hallActiveWithStitchers
+                  ${hallSelected
                     ? `Defaults to <strong>${escapeHtml((state.grnForm.stitcherName || 'Stitcher') + ' (' + activeHall!.name + ')')}</strong> if blank`
                     : 'Person or carrier name for external maker deliveries'}
                 </div>
@@ -320,7 +331,7 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                     const bal = rowCaps ? rowCaps.totalRemaining : Math.max(0, alloc.totalQty - Number(alloc.receivedPairs || 0));
                     const splitRow = effectiveSplitRows[idx];
                     const rowTot = calculateSizeTotal(splitRow.sizes);
-                    const rowHall = halls.find(h => h.name.trim().toLowerCase() === alloc.maker.trim().toLowerCase() && h.stitchers.length > 0);
+                    const rowHall = halls.find(h => h.name.trim().toLowerCase() === alloc.maker.trim().toLowerCase());
                     return `
                     <tr data-split-idx="${idx}" data-maker="${escapeHtml(alloc.maker)}">
                       <td style="text-align: left;">
@@ -330,9 +341,10 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                             <div class="inw-static-sub">Bal ${bal.toLocaleString()} / ${alloc.totalQty.toLocaleString()} pairs</div>
                           </div>
                           ${rowHall ? `
-                            <select class="inw-control grn-split-stitcher" data-split-idx="${idx}" data-hall-name="${escapeHtml(rowHall.name)}" aria-label="Stitcher for ${escapeHtml(alloc.maker)}" ${bal <= 0 ? 'disabled' : ''}>
-                              <option value="">Select stitcher (${escapeHtml(rowHall.name)})</option>
-                              ${rowHall.stitchers.map(s => `<option value="${escapeHtml(s.name)}" ${(splitRow.stitcherName || '').trim().toLowerCase() === s.name.trim().toLowerCase() ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
+                            <select class="inw-control grn-split-stitcher" data-split-idx="${idx}" data-hall-name="${escapeHtml(rowHall.name)}" aria-label="Stitcher for ${escapeHtml(alloc.maker)}" ${bal <= 0 || rowHall.stitchers.length === 0 ? 'disabled' : ''}>
+                              ${rowHall.stitchers.length === 0
+                                ? `<option value="">No stitchers in ${escapeHtml(rowHall.name)}</option>`
+                                : `<option value="">Select stitcher (${escapeHtml(rowHall.name)})</option>${rowHall.stitchers.map(s => `<option value="${escapeHtml(s.name)}" ${(splitRow.stitcherName || '').trim().toLowerCase() === s.name.trim().toLowerCase() ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}`}
                             </select>
                           ` : ''}
                         </div>
@@ -412,24 +424,59 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
 
         <!-- Card 2: Packing hall requisition queue -->
         <section class="inw-card" aria-labelledby="inw-queue-title">
+          ${
+            !showIssuedHistory && pendingQueueList.length === 0
+              ? `
           <div class="inw-queue-head">
             <div>
               <h2 id="inw-queue-title" class="inw-card-title">Packing hall requisition queue</h2>
               <p class="inw-card-sub">
-                ${escapeHtml(baseReq)}${wip.parentOrderId ? ` for ${escapeHtml(wip.parentOrderId)}` : ''} (${escapeHtml(mReq)}, ${escapeHtml(aReq)}). Issue the asking quantity when received stock is available.
+                ${issuedQueueList.length > 0
+                  ? `${issuedQueueList.length} issued requisition${issuedQueueList.length === 1 ? '' : 's'} moved to history.`
+                  : 'Requisitions from Packing Hall appear here when ready to issue.'}
               </p>
             </div>
+            <div class="inw-queue-head-actions">
+              ${issuedQueueList.length > 0 ? `<button type="button" class="btn-outline inw-btn" id="btn-toggle-inward-issued-queue">View issued history (${issuedQueueList.length})</button>` : ''}
+            </div>
+          </div>
+          <div class="inw-queue-empty-state" data-testid="inw-queue-all-issued">
+            <div class="inw-queue-empty-badge">${issuedQueueList.length > 0 ? '&#10003; Queue clear' : 'No requests'}</div>
+            <div class="inw-queue-empty-title">
+              ${issuedQueueList.length > 0 ? 'All pending requisitions have been issued' : 'No pending requisitions from Packing Hall'}
+            </div>
+            <p class="inw-queue-empty-sub">
+              ${issuedQueueList.length > 0
+                ? 'Already-issued requisitions are hidden from the active queue. Open Issued History above if you need to inspect or reprint a slip.'
+                : 'New requisitions requested by Packing Hall will appear here for Inward stock issuance.'}
+            </p>
+          </div>
+              `
+              : `
+          <div class="inw-queue-head">
             <div>
+              <h2 id="inw-queue-title" class="inw-card-title">Packing hall requisition queue</h2>
+              <p class="inw-card-sub">
+                ${escapeHtml(baseReq)}${displayReq.parentOrderId ? ` for ${escapeHtml(displayReq.parentOrderId)}` : ''} (${escapeHtml(mReq)}, ${escapeHtml(aReq)}). ${
+                  showIssuedHistory
+                    ? 'Viewing already-issued requisition history.'
+                    : 'Issue the asking quantity when received stock is available.'
+                }
+              </p>
+            </div>
+            <div class="inw-queue-head-actions">
               ${
-                isReqIssued
-                  ? `<button type="button" class="sr-only" id="btn-issue-req-to-packing" tabindex="-1" disabled>Issued to packing hall</button>`
-                  : `<button type="button" class="inw-btn inw-btn--primary" id="btn-issue-req-to-packing">Issue to packing hall</button>`
+                showIssuedHistory
+                  ? `<button type="button" class="btn-outline inw-btn" id="btn-reprint-issued-req">Reprint slip</button>
+                     <button type="button" class="btn-outline inw-btn" id="btn-toggle-inward-issued-queue">Hide issued history</button>`
+                  : `<button type="button" class="inw-btn inw-btn--primary" id="btn-issue-req-to-packing">Issue to packing hall</button>
+                     ${issuedQueueList.length > 0 ? `<button type="button" class="btn-outline inw-btn" id="btn-toggle-inward-issued-queue">Issued history (${issuedQueueList.length})</button>` : ''}`
               }
             </div>
           </div>
 
           <div class="inw-queue-picker">
-            <label class="inw-label" for="grn-queue-req-select">Active requisition</label>
+            <label class="inw-label" for="grn-queue-req-select">${showIssuedHistory ? 'Issued requisition history' : `Pending requisitions (${pendingQueueList.length})`}</label>
             <select id="grn-queue-req-select" class="inw-control">
               ${activeQueueList.map((item: any) => {
                 const reqCode = normalizeBaseReqNumber(item.selectedBatch || item.reqNumber);
@@ -444,14 +491,14 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
           <div class="inw-queue-meta">
             <div>
               <div class="inw-label">Article</div>
-              <div class="inw-static-val">${escapeHtml(wip.article || '---')}</div>
+              <div class="inw-static-val">${escapeHtml(displayReq.article || '---')}</div>
             </div>
             <div>
               <div class="inw-label">Asking quantity</div>
               <div class="inw-static-val" id="grn-req-asking-qty">${askingPairs.toLocaleString()} pairs</div>
             </div>
             <div>
-              <div class="inw-label">Available stock${wip.parentOrderId ? ` (${escapeHtml(wip.parentOrderId)})` : ''}</div>
+              <div class="inw-label">Available stock${displayReq.parentOrderId ? ` (${escapeHtml(displayReq.parentOrderId)})` : ''}</div>
               <div class="inw-static-val" id="grn-available-stock">${evalIssue.availablePairs.toLocaleString()} pairs</div>
             </div>
             <div>
@@ -460,7 +507,7 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                 isReqIssued
                   ? `<div class="inw-status-line is-ok" id="grn-req-issue-status">&#10003; Issued to packing hall</div><div class="inw-static-sub">Issued by inward register</div>`
                   : askingPairs > 0
-                    ? `<div class="inw-status-line is-pending" id="grn-req-issue-status">${escapeHtml(wip.issueStatus || 'Pending inward issue')}</div>`
+                    ? `<div class="inw-status-line is-pending" id="grn-req-issue-status">${escapeHtml(displayReq.issueStatus || 'Pending inward issue')}</div>`
                     : `<div class="inw-status-line is-muted" id="grn-req-issue-status">Awaiting packing hall requisition</div>`
               }
             </div>
@@ -478,12 +525,14 @@ export function renderInwardRegisterScreen(ctx: InwardRegisterRenderContext): st
                 <tbody>
                   <tr>
                     <td>Pairs</td>
-                    ${wipCodes.map(sz => `<td>${Number(wip.sizes?.[sz] || 0).toLocaleString()}</td>`).join('')}
+                    ${wipCodes.map(sz => `<td>${Number(displayReq.sizes?.[sz] || 0).toLocaleString()}</td>`).join('')}
                   </tr>
                 </tbody>
               </table>
             </div>
           </div>
+              `
+          }
           ${(() => {
             const inwardReworkItems = (state.defectList || []).filter((d: any) =>
               d.altId && (

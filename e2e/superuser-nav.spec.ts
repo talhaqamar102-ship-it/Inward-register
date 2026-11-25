@@ -196,8 +196,17 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.click('#btn-admin-save-customer');
     await expect(page.locator('#admin-pending-order-buyer')).toContainText(hostileBuyer);
 
-    // Create a Master Order using the hostile buyer, hostile PO, and hostile color
+    // Selecting the brand-new hostile buyer shows strict 0-article CTA, then create buyer-linked article in Section 3
     await page.selectOption('#admin-pending-order-buyer', hostileBuyer);
+    await expect(page.locator('#admin-no-buyer-articles-notice')).toBeVisible();
+    await page.click('[data-su-action="create-article-for-buyer"]');
+    const hostileArticle = `XSS<script>alert(2)</script> Glove`;
+    await page.fill('#admin-prod-name', hostileArticle);
+    await page.fill('#admin-prod-color-input', 'Black / Tan');
+    await page.click('#btn-admin-add-prod-color');
+    await page.click('#btn-admin-save-product');
+    await expect(page.locator('#admin-pending-order-article')).toContainText(hostileArticle);
+
     const makerOption = await page.locator('#admin-pending-order-maker option').nth(1).getAttribute('value');
     const articleOption = await page.locator('#admin-pending-order-article option').nth(1).getAttribute('value');
     expect(makerOption).toBeTruthy();
@@ -206,7 +215,8 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.selectOption('#admin-pending-order-article', articleOption!);
     await page.fill('#admin-pending-order-po', hostilePo);
     await page.fill('#admin-pending-order-color', hostileColor);
-    await page.fill('.admin-order-size-val[data-size="7"]', '40');
+    const firstOrderSizeInput = page.locator('.admin-order-size-val').first();
+    await firstOrderSizeInput.fill('40');
     await page.click('#btn-admin-add-pending-order');
 
     const createdOrderCard = page.locator('[data-su-action="remove-pending-order"]').first();
@@ -298,6 +308,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#admin-cust-name')).not.toHaveAttribute('aria-invalid', 'true');
     await page.fill('#admin-cust-name', '');
 
+    await page.click('.su-reg-tab[data-registry-tab="articles"]');
     await page.click('#btn-admin-save-product');
     await expect(page.locator('#admin-prod-name')).toHaveAttribute('aria-invalid', 'true');
     await expect(page.locator('#admin-prod-name-error')).toHaveText('Enter an article name.');
@@ -317,7 +328,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     // 2. runAdminAction in-flight gating prevents double POST on rapid double-click
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
-    await page.selectOption('#admin-pending-order-maker', makerOption!);
+    await page.selectOption('#admin-pending-order-maker', 'Maker A');
     await page.selectOption('#admin-pending-order-article', articleOption!);
     await page.fill('#admin-pending-order-po', 'PO-GATE-42');
     await page.fill('.admin-order-size-val[data-size="7"]', '80');
@@ -536,6 +547,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await authenticateAsSuperUser(page);
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
     await expect(page.locator('.su-customer-form-grid')).toBeVisible();
+    await page.click('.su-reg-tab[data-registry-tab="articles"]');
     await expect(page.locator('.su-article-form-grid')).toBeVisible();
 
     for (const vp of [
@@ -545,17 +557,21 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     ]) {
       await page.setViewportSize(vp);
 
-      const layoutReport = await page.evaluate(() => {
-        const docOverflow = document.documentElement.scrollWidth > document.documentElement.clientWidth;
-        const results: Array<{
-          gridSelector: string;
-          clipped: boolean;
-          overlapped: boolean;
-          tooNarrow: boolean;
-          boxes: Array<{ x: number; y: number; width: number; height: number }>;
-        }> = [];
+      const results: Array<{
+        gridSelector: string;
+        clipped: boolean;
+        overlapped: boolean;
+        tooNarrow: boolean;
+        boxes: Array<{ x: number; y: number; width: number; height: number }>;
+      }> = [];
 
-        for (const gridSelector of ['.su-customer-form-grid', '.su-article-form-grid']) {
+      for (const entry of [
+        { tab: 'buyers', gridSelector: '.su-customer-form-grid' },
+        { tab: 'articles', gridSelector: '.su-article-form-grid' }
+      ]) {
+        await page.click(`.su-reg-tab[data-registry-tab="${entry.tab}"]`);
+        const gridReport = await page.evaluate((gridSelector) => {
+          const docOverflow = document.documentElement.scrollWidth > document.documentElement.clientWidth;
           const grid = document.querySelector<HTMLElement>(gridSelector);
           if (!grid) throw new Error(`Missing grid ${gridSelector}`);
           const gridRect = grid.getBoundingClientRect();
@@ -583,14 +599,20 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
             }
           }
 
-          results.push({ gridSelector, clipped, overlapped, tooNarrow, boxes });
-        }
+          return { docOverflow, gridSelector, clipped, overlapped, tooNarrow, boxes };
+        }, entry.gridSelector);
 
-        return { docOverflow, results };
-      });
+        expect(gridReport.docOverflow, `Horizontal overflow at ${vp.width}px`).toBe(false);
+        results.push({
+          gridSelector: gridReport.gridSelector,
+          clipped: gridReport.clipped,
+          overlapped: gridReport.overlapped,
+          tooNarrow: gridReport.tooNarrow,
+          boxes: gridReport.boxes
+        });
+      }
 
-      expect(layoutReport.docOverflow, `Horizontal overflow at ${vp.width}px`).toBe(false);
-      for (const gridCheck of layoutReport.results) {
+      for (const gridCheck of results) {
         expect(gridCheck.clipped, `${gridCheck.gridSelector} clipped at ${vp.width}px`).toBe(false);
         expect(gridCheck.overlapped, `${gridCheck.gridSelector} overlapped at ${vp.width}px`).toBe(false);
         expect(gridCheck.tooNarrow, `${gridCheck.gridSelector} too narrow at ${vp.width}px`).toBe(false);
@@ -627,9 +649,8 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     const makerSelect = page.locator('#admin-pending-order-maker');
     const articleSelect = page.locator('#admin-pending-order-article');
-    const makerOption = await makerSelect.locator('option').nth(1).getAttribute('value');
     const articleOption = await articleSelect.locator('option').nth(1).getAttribute('value');
-    await makerSelect.selectOption(makerOption!);
+    await makerSelect.selectOption('Maker A');
     await articleSelect.selectOption(articleOption!);
     await page.fill('#admin-pending-order-po', 'PO-INWARD-LOCK');
     await page.fill('#admin-pending-order-color', 'Safety Orange');
@@ -856,9 +877,8 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await authenticateAsSuperUser(page);
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
 
-    const makerOption = await page.locator('#admin-pending-order-maker option').nth(1).getAttribute('value');
     await page.selectOption('#admin-pending-order-buyer', 'Globex Supply Co.');
-    await page.selectOption('#admin-pending-order-maker', makerOption!);
+    await page.selectOption('#admin-pending-order-maker', 'Maker A');
     await page.selectOption('#admin-pending-order-article', 'Model A1');
     await page.fill('#admin-pending-order-po', 'PO-PH-GATE');
     await page.fill('#admin-pending-order-color', 'Slate Black');
@@ -903,7 +923,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('[data-testid="wip-mreq-gate"]')).not.toHaveClass(/is-ready/);
     await expect(page.locator('#wip-mreq-qty')).toHaveText('0 Sets');
     await expect(page.locator('#btn-wip-generate-mreq-slip')).toBeDisabled();
-    await expect(page.locator('#btn-wip-print-mreq-slip')).toBeDisabled();
+    await expect(page.locator('#btn-wip-print-mreq-slip')).toHaveCount(0);
     await expect(page.locator('#btn-wip-step4')).toBeDisabled();
 
     // Issue requisition at Inward Register
@@ -925,7 +945,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     // After Inward Issue -> Stage 1 active, Material Requisition STILL locked until Stage 3 clears
     await expect(page.locator('#wip-stg1-in')).toHaveText('100');
     await expect(page.locator('#btn-wip-generate-mreq-slip')).toBeDisabled();
-    await expect(page.locator('#btn-wip-print-mreq-slip')).toBeDisabled();
+    await expect(page.locator('#btn-wip-print-mreq-slip')).toHaveCount(0);
     await expect(page.locator('#btn-wip-step4')).toBeDisabled();
 
     // Clear Stage 1 -> still locked during Stage 2
@@ -933,30 +953,32 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.click('#btn-submit-step1-action');
     await expect(page.locator('#wip-stg2-in')).toHaveText('100');
     await expect(page.locator('#btn-wip-generate-mreq-slip')).toBeDisabled();
-    await expect(page.locator('#btn-wip-print-mreq-slip')).toBeDisabled();
+    await expect(page.locator('#btn-wip-print-mreq-slip')).toHaveCount(0);
 
     // Clear Stage 2 -> still locked during Stage 3
     await page.click('#btn-wip-step2');
     await page.click('#btn-submit-step2-action');
     await expect(page.locator('#wip-stg3-in')).toHaveText('100');
     await expect(page.locator('#btn-wip-generate-mreq-slip')).toBeDisabled();
-    await expect(page.locator('#btn-wip-print-mreq-slip')).toBeDisabled();
+    await expect(page.locator('#btn-wip-print-mreq-slip')).toHaveCount(0);
     await expect(page.locator('#btn-wip-step4')).toBeDisabled();
 
-    // Clear Stage 3 (Pair Matching) -> Material Requisition unlocks (100 Sets), Stage 4 waits for slip generation
+    // Clear Stage 3 (Pair Matching) -> Material Requisition unlocks (100 Sets), Generate slip only until issued
     await page.click('#btn-wip-step3');
     await page.click('#btn-submit-step3-action');
     await expect(page.locator('#wip-mreq-qty')).toHaveText('100 Sets');
     await expect(page.locator('[data-testid="wip-mreq-gate"]')).toHaveClass(/is-ready/);
     await expect(page.locator('#btn-wip-generate-mreq-slip')).toBeEnabled();
-    await expect(page.locator('#btn-wip-print-mreq-slip')).toBeEnabled();
+    await expect(page.locator('#btn-wip-print-mreq-slip')).toHaveCount(0);
     await expect(page.locator('#btn-wip-step4')).toBeDisabled();
 
-    // Generate & Issue Material Requisition -> opens slip modal and unlocks Stage 4
+    // Generate & Issue Material Requisition -> opens slip modal, switches card action to Print slip, and unlocks Stage 4
     await page.click('#btn-wip-generate-mreq-slip');
     await expect(page.locator('#global-modal.open')).toBeVisible();
     await expect(page.locator('#modal-body')).toContainText('100');
     await page.click('#modal-btn-close');
+    await expect(page.locator('#btn-wip-generate-mreq-slip')).toHaveCount(0);
+    await expect(page.locator('#btn-wip-print-mreq-slip')).toBeEnabled();
     await expect(page.locator('#btn-wip-step4')).toBeEnabled();
 
     expect(runtimeErrors).toEqual([]);
@@ -979,46 +1001,49 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await authenticateAsSuperUser(page);
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
 
-    // Order creation reads as a sheet: no card chrome, plain copy, no duplicated step badges
-    await expect(page.locator('.su-order-hub')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-    await expect(page.locator('.su-order-hub')).toHaveCSS('border-top-width', '0px');
-    await expect(page.locator('.su-order-hub .panel-card-title')).toContainText('1. Order creation');
-    await expect(page.locator('.su-registry-step-badge')).toHaveCount(0);
-    await expect(page.locator('.su-registries-toolbar')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-    await expect(page.locator('.su-registries-toolbar-title')).toHaveCSS('text-transform', 'none');
+    // Card layout + Tabbed Master Registries + Non-fixed Totals Strip
+    await expect(page.locator('[data-testid="su-order-creation-card"] .su-oc-card-title')).toContainText('Order creation');
+    await expect(page.locator('[data-testid="su-saved-orders-card"]')).toBeVisible();
+    await expect(page.locator('.su-reg-tabs .su-reg-tab')).toHaveCount(7);
+    await expect(page.locator('.su-reg-tab[data-registry-tab="buyers"]')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.su-reg-panel[data-registry-id="buyers"]')).toBeVisible();
+    await expect(page.locator('.su-reg-panel[data-registry-id="makers_pos"]')).toBeHidden();
 
-    const gridBox = await page.locator('.su-registries-grid').boundingBox();
-    expect(gridBox).not.toBeNull();
+    // Non-fixed Totals summary strip sits in normal flow (not position: fixed)
+    const totalsPosition = await page.locator('[data-testid="su-oc-totals-strip"]').evaluate(el => getComputedStyle(el).position);
+    expect(totalsPosition).not.toBe('fixed');
 
-    // Open Section 2 spans full grid width while closed Section 4 stays compact (~half grid width)
-    const buyersCard = page.locator('details.su-collapsible-registry[data-registry-id="buyers"]');
-    const makersCard = page.locator('details.su-collapsible-registry[data-registry-id="makers_pos"]');
-    await expect(buyersCard).toHaveAttribute('open', '');
-    await expect(makersCard).not.toHaveAttribute('open', '');
+    // Switch to Makers & halls tab and verify Maker persistence preserves active tab across renderApp()
+    await page.click('.su-reg-tab[data-registry-tab="makers_pos"]');
+    await expect(page.locator('.su-reg-tab[data-registry-tab="makers_pos"]')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.su-reg-panel[data-registry-id="makers_pos"]')).toBeVisible();
+    await expect(page.locator('.su-reg-panel[data-registry-id="buyers"]')).toBeHidden();
 
-    const buyersOpenBox = await buyersCard.boundingBox();
-    const makersClosedBox = await makersCard.boundingBox();
-    expect(buyersOpenBox!.width).toBeGreaterThan(gridBox!.width * 0.9);
-    expect(makersClosedBox!.width).toBeLessThan(gridBox!.width * 0.55);
-
-    // Clicking Section 4 summary opens it full width and switches toggle pill to Collapse
-    await makersCard.locator('summary').click();
-    await expect(makersCard).toHaveAttribute('open', '');
-    const makersOpenBox = await makersCard.boundingBox();
-    expect(makersOpenBox!.width).toBeGreaterThan(gridBox!.width * 0.9);
-
-    // Adding a Maker calls renderApp() — Section 4 must stay open
     await page.fill('#admin-add-maker-input', 'Hall Z Persistent');
     await page.click('#btn-admin-add-maker');
-    await expect(makersCard).toHaveAttribute('open', '');
-    await expect(makersCard).toContainText('Hall Z Persistent');
+    await expect(page.locator('.su-reg-tab[data-registry-tab="makers_pos"]')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.su-reg-panel[data-registry-id="makers_pos"]')).toContainText('Hall Z Persistent');
 
-    // Collapse All / Expand All toolbar controls operate all 6 registry drawers
-    await page.click('button[data-su-action="toggle-all-registries"][data-expanded="false"]');
-    await expect(page.locator('details.su-collapsible-registry[open]')).toHaveCount(0);
+    // Expandable +N more size chips in Saved Orders card + multi-viewport zero-overflow check
+    const expandChipBtn = page.locator('button[data-su-action="toggle-order-size-chips"]').first();
+    if (await expandChipBtn.count()) {
+      await expandChipBtn.click();
+      await expect(page.locator('button[data-su-action="toggle-order-size-chips"]', { hasText: 'Show less' }).first()).toBeVisible();
+    }
 
-    await page.click('button[data-su-action="toggle-all-registries"][data-expanded="true"]');
-    await expect(page.locator('details.su-collapsible-registry[open]')).toHaveCount(6);
+    for (const vp of [
+      { width: 1440, height: 900 },
+      { width: 768, height: 1024 },
+      { width: 375, height: 812 }
+    ]) {
+      await page.setViewportSize(vp);
+      const geom = await page.evaluate(() => ({
+        sw: document.documentElement.scrollWidth,
+        cw: document.documentElement.clientWidth
+      }));
+      expect(geom.sw, `Order Creation overflow at ${vp.width}px`).toBeLessThanOrEqual(geom.cw);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     expect(runtimeErrors).toEqual([]);
   });
@@ -1102,9 +1127,9 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(savedRow).toContainText('G-175102-BK 132 RED');
     await expect(savedRow).toContainText('Black,Red,White');
     await expect(savedRow).toContainText('IXS MEN');
-    await expect(savedRow).toContainText('2XS:10');
-    await expect(savedRow).toContainText('XS:20');
-    await expect(savedRow).toContainText('M:30');
+    await expect(savedRow).toContainText('2XS 10');
+    await expect(savedRow).toContainText('XS 20');
+    await expect(savedRow).toContainText('M 30');
     await expect(savedRow).toContainText('60');
 
     await page.reload();
@@ -1112,8 +1137,8 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
     const reloadedRow = page.locator('[data-testid="superuser-command-center"] table.data-table').first().locator('tr', { hasText: 'PO-CASCADE-IXS' });
     await expect(reloadedRow).toContainText('IXS MEN');
-    await expect(reloadedRow).toContainText('2XS:10');
-    await expect(reloadedRow).toContainText('M:30');
+    await expect(reloadedRow).toContainText('2XS 10');
+    await expect(reloadedRow).toContainText('M 30');
 
     expect(runtimeErrors).toEqual([]);
   });
@@ -1142,7 +1167,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     // Create BERIK IXS MEN order
     await page.selectOption('#admin-pending-order-buyer', 'BERIK');
     await page.selectOption('#admin-pending-order-article', 'G-175102-BK 132 RED');
-    await page.selectOption('#admin-pending-order-maker', { index: 1 });
+    await page.selectOption('#admin-pending-order-maker', 'Maker A');
     await page.fill('#admin-pending-order-po', 'PO-SLICE3-IXS');
     await page.fill('.admin-order-size-val[data-size="2XS"]', '15');
     await page.fill('.admin-order-size-val[data-size="XS"]', '25');
@@ -1281,6 +1306,8 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.fill('.admin-order-size-val[data-size="8"]', '40');
     await page.click('#btn-admin-toggle-split');
 
+    await page.selectOption('.admin-split-maker[data-split-index="0"]', 'Maker A');
+    await page.selectOption('.admin-split-maker[data-split-index="1"]', 'Maker B');
     const m1Val = await page.locator('.admin-split-maker[data-split-index="0"]').inputValue();
     const m2Val = await page.locator('.admin-split-maker[data-split-index="1"]').inputValue();
     await page.fill('.admin-split-size-val[data-split-index="0"][data-size="7"]', '60');
@@ -1401,7 +1428,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     // 2. Create 100-pair Order, receive GRN, draw & issue REQ, and send 10 defects at Stage 1
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
-    await page.selectOption('#admin-pending-order-maker', 'Hall A');
+    await page.selectOption('#admin-pending-order-maker', 'Maker A');
     await page.selectOption('#admin-pending-order-article', 'Model A1');
     await page.fill('#admin-pending-order-po', 'PO-E2E-ALT-01');
     await page.fill('.admin-order-size-val[data-size="7"]', '100');
@@ -1590,7 +1617,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#wip-stg1-in')).toHaveText('8');
     await expect(page.locator('#wip-mreq-qty')).toHaveText('90 Sets');
     await expect(page.locator('#btn-wip-generate-mreq-slip')).toBeEnabled();
-    await expect(page.locator('#btn-wip-print-mreq-slip')).toBeEnabled();
+    await expect(page.locator('#btn-wip-print-mreq-slip')).toHaveCount(0);
     await expect(page.locator('#btn-wip-step4')).toBeDisabled();
     await expect(page.locator('[data-testid="wip-mreq-gate"]')).toHaveClass(/is-ready/);
     await expect(page.locator('#wip-rework-returned')).toHaveText('8');
@@ -1814,8 +1841,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     // 1. Registry 04: Add custom Hall and assigned Stitchers
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
-    const makersRegistry = page.locator('details.su-collapsible-registry[data-registry-id="makers_pos"]');
-    await makersRegistry.locator('summary').click();
+    await page.click('.su-reg-tab[data-registry-tab="makers_pos"]');
     await expect(page.locator('#admin-add-hall-input')).toBeVisible();
 
     await page.fill('#admin-add-hall-input', hallName);
@@ -1859,7 +1885,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.reload();
     await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
-    await page.locator('details.su-collapsible-registry[data-registry-id="makers_pos"] summary').click();
+    await page.click('.su-reg-tab[data-registry-tab="makers_pos"]');
     const persistedCard = page.locator(`.su-hall-card[data-hall-name="${hallName}"]`);
     await expect(persistedCard).toBeVisible();
     await expect(persistedCard).toContainText(stitcherA);
@@ -1962,6 +1988,9 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('.inw .inw-action-link').first()).toHaveCSS('color', 'rgb(24, 24, 27)');
 
     // Verify Inward Register flexible full-width layout, sub-header, & zero overflow across 1600 / 1440 / 768 / 375px
+    if ((await page.locator('.inw-queue-meta').count()) === 0 && (await page.locator('#btn-toggle-inward-issued-queue').isVisible())) {
+      await page.click('#btn-toggle-inward-issued-queue');
+    }
     for (const vp of [
       { width: 1600, height: 900, expectOrderCols: 4, expectChainCols: 3, expectQueueCols: 4 },
       { width: 1440, height: 900, expectOrderCols: 4, expectChainCols: 3, expectQueueCols: 4 },
@@ -2036,10 +2065,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('[data-testid="superuser-command-center"]')).toBeVisible();
     await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
-    const cleanupDetails = page.locator('details.su-collapsible-registry[data-registry-id="makers_pos"]');
-    if (!(await cleanupDetails.evaluate(el => el.hasAttribute('open')))) {
-      await cleanupDetails.locator('summary').click();
-    }
+    await page.click('.su-reg-tab[data-registry-tab="makers_pos"]');
     const hallDeleteBtn = page.locator(`.su-hall-card[data-hall-name="${hallName}"] button[data-su-action="delete-hall"]`);
     await hallDeleteBtn.click();
     await expect(page.locator('#confirm-dialog-confirm')).toBeVisible();
@@ -2087,7 +2113,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
     await page.selectOption('#admin-pending-order-buyer', 'OXFORD');
     await page.fill('#admin-pending-order-po', 'PO-MULTI-TREE-01');
-    await page.selectOption('#admin-pending-order-maker', 'Hall A');
+    await page.selectOption('#admin-pending-order-maker', 'Maker A');
     await page.click('#btn-admin-toggle-multi-articles');
     await expect(page.locator('[data-testid="admin-multi-article-picker"]')).toBeVisible();
 
@@ -2110,11 +2136,11 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
 
     const subCards = page.locator('.su-suborder-card');
     await expect(subCards).toHaveCount(2);
-    await expect(page.locator('.admin-line-maker[data-line-index="0"]')).toHaveValue('Hall A');
-    await expect(page.locator('.admin-line-maker[data-line-index="1"]')).toHaveValue('Hall A');
+    await expect(page.locator('.admin-line-maker[data-line-index="0"]')).toHaveValue('Maker A');
+    await expect(page.locator('.admin-line-maker[data-line-index="1"]')).toHaveValue('Maker A');
 
-    // Override sub-order 2 contractor to Hall B cleanly
-    await page.selectOption('.admin-line-maker[data-line-index="1"]', 'Hall B');
+    // Override sub-order 2 contractor to Maker B cleanly
+    await page.selectOption('.admin-line-maker[data-line-index="1"]', 'Maker B');
     await page.locator('.admin-line-size-val[data-line-index="0"]').first().fill('100');
     await page.locator('.admin-line-size-val[data-line-index="1"]').first().fill('60');
     await expect(page.locator('#btn-admin-add-pending-order')).toContainText('Save & issue 2 sub-orders');
@@ -2137,16 +2163,26 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator(`button[data-su-action="remove-pending-order"][data-order-id="${sub1}"]`)).toBeVisible();
     await expect(page.locator(`button[data-su-action="remove-pending-order"][data-order-id="${sub2}"]`)).toBeVisible();
 
-    // 3. Sign in as Packing Supervisor BEFORE GRN: unreceived sub1/sub2 must NOT appear in Packing Hall
+    // 3. Sign in as Packing Supervisor BEFORE GRN: unreceived sub1/sub2 must NOT appear in Packing Hall dropdown or New REQ picker
     await page.click('#btn-session-lock');
     await page.fill('#auth-username', packUser);
     await page.fill('#auth-password', packPass);
     await page.click('#auth-form button[type="submit"]');
     await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
     await expect(page.locator('#wip-batch-select')).toBeVisible();
+    await expect(page.locator('#wip-batch-select option[value^="ORDER:"]')).toHaveCount(0);
     const preGrnOptions = await page.locator('#wip-batch-select').innerText();
     expect(preGrnOptions).not.toContain(sub1);
     expect(preGrnOptions).not.toContain(sub2);
+    if (await page.locator('#btn-wip-new-req').isEnabled()) {
+      await page.click('#btn-wip-new-req');
+      await expect(page.locator('#new-req-parent-order')).toBeVisible();
+      const preGrnModalOrders = await page.locator('#new-req-parent-order').innerText();
+      expect(preGrnModalOrders).not.toContain(sub1);
+      expect(preGrnModalOrders).not.toContain(sub2);
+      await page.click('#global-modal [data-modal-cancel]');
+      await expect(page.locator('#global-modal.open')).toHaveCount(0);
+    }
 
     // 4. Sign in as Super User -> receive partial 40 of 100 pairs on sub1 at Inward Register
     await page.click('#btn-session-lock');
@@ -2162,21 +2198,25 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(page.locator('#global-modal.open')).toBeVisible();
     await page.click('#modal-btn-close');
 
-    // 5. Return as Packing Supervisor -> ONLY sub1 shows (40 pairs available, never 100), sub2 still hidden
+    // 5. Return as Packing Supervisor -> ONLY sub1 shows in + Generate Requisition modal (40 Prs available, never 100), sub2 still hidden
     await page.click('#btn-session-lock');
     await page.fill('#auth-username', packUser);
     await page.fill('#auth-password', packPass);
     await page.click('#auth-form button[type="submit"]');
     await expect(page.locator('#wip-batch-select')).toBeVisible();
-    const afterGrn1Text = await page.locator('#wip-batch-select').innerText();
-    expect(afterGrn1Text).toContain(`${sub1}`);
-    expect(afterGrn1Text).not.toContain(sub2);
-    const sub1OptionText = await page.locator(`#wip-batch-select option[value="ORDER:${sub1}"]`).textContent();
-    expect(sub1OptionText || '').toContain('40 pairs available');
-    expect(sub1OptionText || '').not.toContain('100 pairs');
+    await expect(page.locator('#wip-batch-select option[value^="ORDER:"]')).toHaveCount(0);
+    await expect(page.locator('#btn-wip-new-req')).toBeEnabled();
+    await page.click('#btn-wip-new-req');
+    await expect(page.locator('#new-req-parent-order')).toBeVisible();
+    const afterGrn1ModalText = await page.locator('#new-req-parent-order').innerText();
+    expect(afterGrn1ModalText).toContain(`${sub1}`);
+    expect(afterGrn1ModalText).not.toContain(sub2);
+    const sub1OptionText = await page.locator(`#new-req-parent-order option[value="${sub1}"]`).textContent();
+    expect(sub1OptionText || '').toContain('40 Prs available');
+    expect(sub1OptionText || '').not.toContain('100 Prs');
 
-    // Open REQ modal by choosing Load ORDER:sub1 -> verify stock-only summary & Available row (no Order Remaining)
-    await page.selectOption('#wip-batch-select', `ORDER:${sub1}`);
+    // Select sub1 inside + Generate Requisition modal -> verify stock-only summary & Available row (no Order Remaining)
+    await page.selectOption('#new-req-parent-order', sub1);
     await expect(page.locator('#new-req-cap-summary')).toContainText('Available at Dock: 40 Prs');
     await expect(page.locator('#new-req-cap-summary')).not.toContainText('Order Remaining');
     await expect(page.locator('#new-req-cap-summary')).not.toContainText('Inward Received');
@@ -2190,9 +2230,12 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     ]);
     await expect(page.locator('#global-modal.open')).toHaveCount(0);
 
-    // Remaining unclaimed stock on sub1 now drops to 15 pairs available
-    const sub1AfterReqText = await page.locator(`#wip-batch-select option[value="ORDER:${sub1}"]`).textContent();
-    expect(sub1AfterReqText || '').toContain('15 pairs available');
+    // Remaining unclaimed stock on sub1 now drops to 15 Prs available inside + Generate Requisition modal
+    await page.click('#btn-wip-new-req');
+    const sub1AfterReqText = await page.locator(`#new-req-parent-order option[value="${sub1}"]`).textContent();
+    expect(sub1AfterReqText || '').toContain('15 Prs available');
+    await page.click('#global-modal [data-modal-cancel]');
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
 
     // 6. Receive 60 pairs on sub2 & create 30-pair REQ on sub2
     await page.click('#btn-session-lock');
@@ -2212,7 +2255,9 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.fill('#auth-username', packUser);
     await page.fill('#auth-password', packPass);
     await page.click('#auth-form button[type="submit"]');
-    await page.selectOption('#wip-batch-select', `ORDER:${sub2}`);
+    await page.click('#btn-wip-new-req');
+    await expect(page.locator('#new-req-parent-order')).toBeVisible();
+    await page.selectOption('#new-req-parent-order', sub2);
     await expect(page.locator('#new-req-cap-summary')).toContainText('Available at Dock: 60 Prs');
     await page.locator('.req-size-val').first().fill('30');
     await Promise.all([
@@ -2494,7 +2539,7 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
       const orderRes = await post('/api/admin/pending-orders', {
         buyer: 'Alpine QCD Buyer',
         maker: 'Raja',
-        poNumber: 'PO-QCD-2026',
+        po: 'PO-QCD-2026',
         article: 'V3-QCD-TEST',
         color: 'Black',
         sizeFormat: 'LEGACY_7_11',
@@ -2541,9 +2586,18 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await page.getByRole('button', { name: 'Expand all' }).click();
     await page.locator(`[data-su-action="open-qc-dispatch"][data-order-id="${seeded.orderId}"]`).click();
 
+    await expect(page.locator('#qcd-queue thead')).toContainText('PO #');
+    await expect(page.locator('#qcd-queue thead')).toContainText('Requisition (Lot)');
+    const orderGroupRow = page.locator(`#qcd-queue tr[data-qcd-order-group="${seeded.orderId}"]`);
+    await expect(orderGroupRow).toBeVisible();
     const queueRow = page.locator(`#qcd-queue tr[data-qcd-row="${seeded.reqNo}"]`);
     await expect(queueRow).toBeVisible();
     await expect(queueRow).toContainText('Awaiting AQL');
+    const poCellText = (await queueRow.locator('td').nth(1).textContent())?.trim() || '';
+    const articleCellText = (await queueRow.locator('td').nth(3).textContent())?.trim() || '';
+    expect(poCellText.length).toBeGreaterThan(0);
+    expect(poCellText).not.toBe('---');
+    expect(articleCellText).not.toContain(`(${poCellText})`);
 
     // 2. Inspect AQL (0 defects -> Ready to box)
     await page.locator(`[data-qcd-action="aql"][data-req-number="${seeded.reqNo}"]`).click();
@@ -2892,9 +2946,9 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     expect(releasePostCount).toBe(1);
     await page.click('#modal-close-x');
     await page.click('.admin-tab-btn[data-admin-tab="orders"]');
-    const auditRegistry = page.locator('details[data-registry-id="audit_trail"]');
-    await auditRegistry.locator('summary').click();
-    const auditRows = auditRegistry.locator('tbody tr', { hasText: 'DISPATCH_RELEASE' }).filter({ hasText: seeded.reqNo });
+    await page.click('.su-reg-tab[data-registry-tab="audit_trail"]');
+    const auditPanel = page.locator('.su-reg-panel[data-registry-id="audit_trail"]');
+    const auditRows = auditPanel.locator('tbody tr', { hasText: 'DISPATCH_RELEASE' }).filter({ hasText: seeded.reqNo });
     await expect(auditRows).toHaveCount(1);
     expect(runtimeErrors).toEqual([]);
   });
@@ -2997,6 +3051,799 @@ test.describe('Super User UI at 1440px & Core Interactive Flows', () => {
     await expect(reloadedRows.nth(0)).toContainText('SEA');
     await expect(reloadedRows.nth(1)).toContainText('AIR');
     await expect(reloadedRows.nth(2)).toContainText('AIR');
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Buyer -> Article strict isolation, multi-colourways, and Section 4 carton packing work end-to-end', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('console', msg => {
+      if (msg.type() === 'error') runtimeErrors.push(`console.error: ${msg.text()}`);
+    });
+    page.on('pageerror', err => {
+      runtimeErrors.push(`pageerror: ${err.message}`);
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+    });
+
+    const uniqueSuffix = Date.now().toString().slice(-6);
+    const buyerName = `Oxford Custom ${uniqueSuffix}`;
+    const articleName = `Oxford Tri-Shade ${uniqueSuffix}`;
+
+    await authenticateAsSuperUser(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+
+    // 1. Create a brand-new buyer -> strict Buyer -> Article filter shows empty-state CTA and disables unrelated fallback articles
+    await page.fill('#admin-cust-name', buyerName);
+    await page.fill('#admin-cust-country', 'United Kingdom');
+    await page.click('#btn-admin-save-customer');
+    await expect(page.locator('#admin-pending-order-buyer')).toContainText(buyerName);
+
+    await page.selectOption('#admin-pending-order-buyer', buyerName);
+    await expect(page.locator('#admin-pending-order-article')).toBeDisabled();
+    await expect(page.locator('#admin-no-buyer-articles-notice')).toContainText(`No articles created for ${buyerName} yet`);
+    await expect(page.locator('#btn-admin-toggle-multi-articles')).toBeDisabled();
+
+    // 2. Click shortcut -> Section 3 opens with Buyer pre-selected, no Pairs/Ctn or Stickers/Pr fields, and multi-colour builder ready
+    await page.click('[data-su-action="create-article-for-buyer"]');
+    await expect(page.locator('#admin-prod-carton')).toHaveCount(0);
+    await expect(page.locator('#admin-prod-stickers')).toHaveCount(0);
+    const selectedCustOptText = await page.locator('#admin-prod-cust option:checked').textContent();
+    expect(selectedCustOptText?.trim()).toBe(buyerName);
+
+    // Add combined 3-colour combination via presets ("Black / Brown / Tan") + second colourway ("Black")
+    await page.fill('#admin-prod-name', articleName);
+    await page.locator('.su-color-preset-check[value="Black"]').check();
+    await page.locator('.su-color-preset-check[value="Brown"]').check();
+    await page.locator('.su-color-preset-check[value="Tan"]').check();
+    await expect(page.locator('#admin-prod-color-input')).toHaveValue('Black / Brown / Tan');
+    await page.click('#btn-admin-add-prod-color');
+    await expect(page.locator('#admin-prod-color-chips')).toContainText('Black / Brown / Tan');
+
+    await page.locator('.su-color-preset-check[value="Black"]').check();
+    await page.click('#btn-admin-add-prod-color');
+    await expect(page.locator('#admin-prod-color-chips')).toContainText('Black');
+    await page.click('#btn-admin-save-product');
+
+    // 3. Back in Order Creation: only Oxford Custom's article shows, first colourway auto-fills, second is clickable
+    await expect(page.locator('#admin-no-buyer-articles-notice')).toHaveCount(0);
+    const buyerArticleOptions = await page.locator('#admin-pending-order-article option').allTextContents();
+    expect(buyerArticleOptions).toHaveLength(2);
+    expect(buyerArticleOptions[1]).toContain(articleName);
+
+    await page.selectOption('#admin-pending-order-article', articleName);
+    await expect(page.locator('#admin-pending-order-color')).toHaveValue('Black / Brown / Tan');
+    await expect(page.locator('[data-testid="admin-order-color-options"] .su-color-choice-btn')).toHaveCount(2);
+    await page.click('.su-color-choice-btn[data-order-color-choice="Black"]');
+    await expect(page.locator('#admin-pending-order-color')).toHaveValue('Black');
+
+    // 4. Section 4 Carton & Packaging BOM updates Stickers/Pr and Pairs/Ctn cleanly below Article Creation and persists after reload
+    await page.click('.su-reg-tab[data-registry-tab="carton_packing"]');
+    const cartonRegistry = page.locator('.su-reg-panel[data-registry-id="carton_packing"]');
+    await expect(cartonRegistry).toBeVisible();
+    await expect(page.locator('#admin-carton-stickers')).toHaveValue('2');
+    await expect(page.locator('#admin-carton-pairs')).toHaveValue('50');
+    await page.fill('#admin-carton-stickers', '3');
+    await page.fill('#admin-carton-pairs', '40');
+    await page.click('#btn-admin-save-carton-spec');
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await page.selectOption('#admin-pending-order-buyer', buyerName);
+    await page.click('.su-reg-tab[data-registry-tab="carton_packing"]');
+    await expect(page.locator('#admin-carton-stickers')).toHaveValue('3');
+    await expect(page.locator('#admin-carton-pairs')).toHaveValue('40');
+
+    const overflowPx = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflowPx).toBe(0);
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Contractors / Makers & Internal Halls persist across reload, combine in split orders, and delete permanently', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('console', msg => {
+      if (msg.type() === 'error') runtimeErrors.push(`console.error: ${msg.text()}`);
+    });
+    page.on('pageerror', err => {
+      runtimeErrors.push(`pageerror: ${err.message}`);
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+    });
+
+    const uniqueSuffix = Date.now().toString().slice(-6);
+    const extMaker = `Ext Workshop ${uniqueSuffix}`;
+
+    await authenticateAsSuperUser(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+
+    // Open Section 5 and verify Internal Halls do not duplicate in External Contractors, and Active PO widget is gone
+    await page.click('.su-reg-tab[data-registry-tab="makers_pos"]');
+    await expect(page.locator('#admin-add-po-input')).toHaveCount(0);
+    await expect(page.locator('[data-testid="su-external-makers-tags"]')).not.toContainText('Hall A');
+
+    // Add External Contractor and confirm persistence after full page reload
+    await page.fill('#admin-add-maker-input', extMaker);
+    await page.click('#btn-admin-add-maker');
+    await expect(page.locator('[data-testid="su-external-makers-tags"]')).toContainText(extMaker);
+    await expect(page.locator('#admin-pending-order-maker')).toContainText(extMaker);
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await page.click('.su-reg-tab[data-registry-tab="makers_pos"]');
+    await expect(page.locator('[data-testid="su-external-makers-tags"]')).toContainText(extMaker);
+
+    // Create a split order combining Internal Hall ('Hall A') and the External Contractor
+    await page.selectOption('#admin-pending-order-buyer', 'Globex Supply Co.');
+    await page.selectOption('#admin-pending-order-article', 'Model A1');
+    await page.fill('#admin-pending-order-po', `PO-SPLIT-MIX-${uniqueSuffix}`);
+    await page.fill('.admin-order-size-val[data-size="7"]', '60');
+    await page.fill('.admin-order-size-val[data-size="8"]', '40');
+    await page.click('#btn-admin-toggle-split');
+    await page.selectOption('.admin-split-maker[data-split-index="0"]', 'Hall A');
+    await page.selectOption('.admin-split-maker[data-split-index="1"]', extMaker);
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="7"]', '60');
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="8"]', '0');
+    await page.fill('.admin-split-size-val[data-split-index="1"][data-size="8"]', '40');
+    await page.click('#btn-admin-add-pending-order');
+    await expect(page.locator('#main-content')).toContainText(`PO-SPLIT-MIX-${uniqueSuffix}`);
+
+    // Delete the External Contractor via confirm modal and confirm permanent removal across reload
+    await page.click(`button[data-su-action="delete-maker"][data-maker-name="${extMaker}"]`);
+    await page.click('#confirm-dialog-confirm');
+    await expect(page.locator('[data-testid="su-external-makers-tags"]')).not.toContainText(extMaker);
+
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await page.click('.su-reg-tab[data-registry-tab="makers_pos"]');
+    await expect(page.locator('[data-testid="su-external-makers-tags"]')).not.toContainText(extMaker);
+    // Past order retains its recorded contractor label while future dropdown omits the deleted maker
+    await expect(page.locator('#main-content')).toContainText(`PO-SPLIT-MIX-${uniqueSuffix}`);
+    await expect(page.locator('#admin-pending-order-maker')).not.toContainText(extMaker);
+
+    const overflowPx = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflowPx).toBe(0);
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Order Creation two-way split, greyed top fields, + Add another colour, and Assign remaining modal', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        runtimeErrors.push(`console.error: ${msg.text()}`);
+      }
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) {
+        runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+      }
+    });
+
+    await authenticateAsSuperUser(page);
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+
+    // 1) Greyed top Contractor & Due Date + Active Colour + Bottom-Up Auto-Sum when top sizes start empty
+    const articleSelect = page.locator('#admin-pending-order-article');
+    const articleOption = await articleSelect.locator('option').nth(1).getAttribute('value');
+    await articleSelect.selectOption(articleOption!);
+    await page.fill('#admin-pending-order-po', 'PO-TWO-WAY-E2E');
+    await page.fill('#admin-pending-order-color', 'Cobalt Blue');
+    await page.click('#btn-admin-toggle-split');
+
+    await expect(page.locator('#admin-pending-order-maker')).toBeDisabled();
+    await expect(page.locator('#admin-pending-order-due-date')).toBeDisabled();
+    await expect(page.locator('#admin-pending-order-color')).toBeEnabled();
+
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="7"]', '45');
+    await page.fill('.admin-split-size-val[data-split-index="1"][data-size="7"]', '35');
+    await expect(page.locator('.admin-order-size-val[data-size="7"]')).toHaveValue('80');
+    await expect(page.locator('#admin-order-size-total')).toHaveText('80');
+    await expect(page.locator('#admin-split-balance-bar')).toContainText('Split Matches Order 100%');
+
+    // 2) + Add another colour duplicates the article as a second colour sub-order (-1, -2) under one PO
+    await page.click('#btn-admin-add-another-colour');
+    await expect(page.locator('[data-testid="admin-suborder-list"] .su-suborder-card')).toHaveCount(2);
+    const secondLineMaker = page.locator('.admin-line-maker[data-line-index="1"]');
+    if (!(await secondLineMaker.inputValue())) {
+      const firstLineMakerOpt = await secondLineMaker.locator('option').nth(1).getAttribute('value');
+      if (firstLineMakerOpt) {
+        await secondLineMaker.selectOption(firstLineMakerOpt);
+      }
+    }
+    await page.fill('.admin-line-color[data-line-index="1"]', 'Crimson Red');
+    await page.fill('.admin-line-size-val[data-line-index="1"][data-size="7"]', '60');
+    await page.click('#btn-admin-add-pending-order');
+    await expect(page.locator('#main-content')).toContainText('PO-TWO-WAY-E2E');
+    await expect(page.locator('#main-content')).toContainText('Cobalt Blue');
+    await expect(page.locator('#main-content')).toContainText('Crimson Red');
+
+    // 3) Top-down partial allocation (200 planned, 80 assigned to 1 contractor, 120 unassigned)
+    await page.selectOption('#admin-pending-order-article', articleOption!);
+    await page.fill('#admin-pending-order-po', 'PO-PARTIAL-E2E');
+    await page.fill('#admin-pending-order-color', 'Charcoal');
+    await page.fill('.admin-order-size-val[data-size="7"]', '100');
+    await page.fill('.admin-order-size-val[data-size="8"]', '100');
+    await page.click('#btn-admin-toggle-split');
+
+    // Remove row 2 so only 1 contractor row stays (Min 1 allowed)
+    await page.click('button[data-su-action="remove-split-row"][data-split-index="1"]');
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="7"]', '50');
+    await page.fill('.admin-split-size-val[data-split-index="0"][data-size="8"]', '30');
+    await expect(page.locator('#admin-split-balance-bar')).toContainText('120 Prs Unassigned');
+    await page.click('#btn-admin-add-pending-order');
+
+    const assignBtn = page.locator('button[data-su-action="assign-remaining-order"]').first();
+    await expect(assignBtn).toBeVisible();
+    const partialOrderId = (await assignBtn.getAttribute('data-order-id'))!;
+    await expect(page.locator('#main-content')).toContainText('120 unassigned');
+
+    // 4) Open Assign remaining modal, split remaining 120 across 2 contractors (70 + 50), and save
+    await assignBtn.click();
+    await expect(page.locator('#assign-remaining-order-modal')).toBeVisible();
+    await expect(page.locator('#assign-rem-pool-total')).toContainText('120 Prs');
+
+    const makers = await page.locator('.assign-rem-row-maker[data-row-idx="0"] option').allTextContents();
+    expect(makers.length).toBeGreaterThan(2);
+    await page.click('#btn-assign-rem-add-row');
+
+    const firstOpt = await page.locator('.assign-rem-row-maker[data-row-idx="0"] option').nth(1).getAttribute('value');
+    const secondOpt = await page.locator('.assign-rem-row-maker[data-row-idx="1"] option').nth(2).getAttribute('value');
+    if (firstOpt && secondOpt) {
+      await page.selectOption('.assign-rem-row-maker[data-row-idx="0"]', firstOpt);
+      await page.selectOption('.assign-rem-row-maker[data-row-idx="1"]', secondOpt === firstOpt ? firstOpt : secondOpt);
+    }
+
+    await page.fill('.assign-rem-size-val[data-row-idx="0"][data-size="7"]', '30');
+    await page.fill('.assign-rem-size-val[data-row-idx="0"][data-size="8"]', '40');
+    await page.fill('.assign-rem-size-val[data-row-idx="1"][data-size="7"]', '20');
+    await page.fill('.assign-rem-size-val[data-row-idx="1"][data-size="8"]', '30');
+    await expect(page.locator('#assign-rem-balance-summary')).toContainText('120 Prs assigning');
+    await expect(page.locator('#assign-rem-balance-summary')).toContainText('0 left unassigned');
+
+    await page.click('#btn-assign-rem-submit');
+    await expect(page.locator('#assign-remaining-order-modal')).toBeHidden();
+    await expect(page.locator(`button[data-su-action="assign-remaining-order"][data-order-id="${partialOrderId}"]`)).toHaveCount(0);
+
+    // Confirm zero unassigned persists across reload and no overflow or runtime errors occur
+    await page.reload();
+    await expect(page.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await expect(page.locator(`button[data-su-action="assign-remaining-order"][data-order-id="${partialOrderId}"]`)).toHaveCount(0);
+
+    const overflowPx = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflowPx).toBe(0);
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Inward Register auto-hides issued REQs into Issued History & auto-selects Hall with mandatory Stitcher for Halls only', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') runtimeErrors.push(`console.error: ${msg.text()}`);
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`http ${res.status()}: ${res.url()}`);
+    });
+
+    await page.addInitScript(() => {
+      window.print = () => {};
+    });
+
+    const suffix = Date.now().toString().slice(-6);
+    const hallWithStitcher = `Hall Inw ${suffix}`;
+    const stitcherName = `Ustad Inw ${suffix}`;
+
+    await authenticateAsSuperUser(page);
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+
+    // Create a custom Hall with a Stitcher in Makers & halls registry
+    await page.click('.su-reg-tab[data-registry-tab="makers_pos"]');
+    await page.fill('#admin-add-hall-input', hallWithStitcher);
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/admin/halls') && res.request().method() === 'POST' && res.status() === 200),
+      page.click('#btn-admin-add-hall')
+    ]);
+    const hallCard = page.locator(`.su-hall-card[data-hall-name="${hallWithStitcher}"]`);
+    await hallCard.locator('[data-hall-stitcher-input]').fill(stitcherName);
+    await Promise.all([
+      page.waitForResponse(res => res.url().includes('/stitchers') && res.request().method() === 'POST' && res.status() === 200),
+      hallCard.locator('button[data-su-action="add-stitcher"]').click()
+    ]);
+
+    // 1) Create three orders: Hall A (0 stitchers), hallWithStitcher (1 stitcher), Maker A (external maker)
+    await page.selectOption('#admin-pending-order-buyer', 'Globex Supply Co.');
+    await page.selectOption('#admin-pending-order-maker', 'Hall A');
+    await page.selectOption('#admin-pending-order-article', 'Model A1');
+    await page.fill('#admin-pending-order-po', `PO-HALL0-${suffix}`);
+    await page.fill('.admin-order-size-val[data-size="7"]', '50');
+    const [hall0Res] = await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/admin/pending-orders') && res.request().method() === 'POST' && res.status() === 200),
+      page.click('#btn-admin-add-pending-order')
+    ]);
+    const hall0OrderId: string = (await hall0Res.json()).data.orderId;
+
+    await page.selectOption('#admin-pending-order-buyer', 'Globex Supply Co.');
+    await page.selectOption('#admin-pending-order-maker', hallWithStitcher);
+    await page.selectOption('#admin-pending-order-article', 'Model A1');
+    await page.fill('#admin-pending-order-po', `PO-HALL1-${suffix}`);
+    await page.fill('.admin-order-size-val[data-size="7"]', '60');
+    const [hall1Res] = await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/admin/pending-orders') && res.request().method() === 'POST' && res.status() === 200),
+      page.click('#btn-admin-add-pending-order')
+    ]);
+    const hall1OrderId: string = (await hall1Res.json()).data.orderId;
+
+    await page.selectOption('#admin-pending-order-buyer', 'Globex Supply Co.');
+    await page.selectOption('#admin-pending-order-maker', 'Maker A');
+    await page.selectOption('#admin-pending-order-article', 'Model A1');
+    await page.fill('#admin-pending-order-po', `PO-MK1-${suffix}`);
+    await page.fill('.admin-order-size-val[data-size="7"]', '40');
+    const [makerRes] = await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/admin/pending-orders') && res.request().method() === 'POST' && res.status() === 200),
+      page.click('#btn-admin-add-pending-order')
+    ]);
+    const makerOrderId: string = (await makerRes.json()).data.orderId;
+
+    // 2) Jump to Inward Register via quick-receive -> verify Hall A auto-selects & blocks Receive (0 stitchers)
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${hall0OrderId}"]`);
+    await expect(page.locator('#grn-hall')).toHaveValue('Hall A');
+    await expect(page.locator('#grn-stitcher')).toBeDisabled();
+    await page.fill('.grn-size-val[data-size="7"]', '20');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+
+    // 3) Select hallWithStitcher order -> auto-selects hallWithStitcher & blocks Receive without Stitcher, then succeeds with Stitcher
+    await page.selectOption('#grn-pending-order', hall1OrderId);
+    await expect(page.locator('#grn-hall')).toHaveValue(hallWithStitcher);
+    await expect(page.locator('#grn-stitcher')).toBeEnabled();
+    await page.fill('.grn-size-val[data-size="7"]', '60');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#grn-stitcher')).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+
+    await page.selectOption('#grn-stitcher', stitcherName);
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await expect(page.locator('#modal-body')).toContainText(`${hallWithStitcher} → ${stitcherName}`);
+    await page.click('#modal-btn-close');
+
+    // 4) Select External Maker order -> Hall stays empty and Receive works WITHOUT a Stitcher
+    await page.selectOption('#grn-pending-order', makerOrderId);
+    await expect(page.locator('#grn-hall')).toHaveValue('');
+    await expect(page.locator('#grn-stitcher')).toBeDisabled();
+    await page.fill('.grn-size-val[data-size="7"]', '40');
+    await page.fill('#grn-received-from', 'Maker Driver');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    // 5) Draw a Packing Hall Requisition for hall1OrderId, return to Inward Register, issue it,
+    //    and confirm queue auto-clears to "All pending requisitions have been issued" + History toggle works
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-create-req"][data-order-id="${hall1OrderId}"]`);
+    await expect(page.locator('#btn-confirm-lot-draw')).toBeVisible();
+    const [reqDrawRes] = await Promise.all([
+      page.waitForResponse(res => res.url().includes(`/api/orders/${encodeURIComponent(hall1OrderId)}/requisitions`) && res.status() === 200),
+      page.click('#btn-confirm-lot-draw')
+    ]);
+    const drawnReqNo: string = (await reqDrawRes.json()).data.reqNumber;
+    await expect(page.locator('#global-modal.open')).toHaveCount(0);
+
+    await page.click('#btn-return-admin');
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${hall1OrderId}"]`);
+    await expect(page.locator('#grn-queue-req-select')).toContainText(drawnReqNo);
+    await expect(page.locator('#btn-issue-req-to-packing')).toBeVisible();
+    await page.click('#btn-issue-req-to-packing');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    // Newly issued REQ is immediately auto-hidden out of pending queue
+    if (await page.locator('#grn-queue-req-select').isVisible()) {
+      await expect(page.locator('#grn-queue-req-select')).not.toContainText(drawnReqNo);
+    }
+
+    // Drain any earlier test pending REQs so the queue shows the clean all-issued state
+    for (let guard = 0; guard < 10; guard += 1) {
+      if (!(await page.locator('#btn-issue-req-to-packing').isVisible())) break;
+      await page.click('#btn-issue-req-to-packing');
+      await expect(page.locator('#global-modal.open')).toBeVisible();
+      await page.click('#modal-btn-close');
+    }
+
+    await expect(page.locator('[data-testid="inw-queue-all-issued"]')).toBeVisible();
+    await expect(page.locator('[data-testid="inw-queue-all-issued"]')).toContainText('All pending requisitions have been issued');
+    await expect(page.locator('#btn-issue-req-to-packing')).toHaveCount(0);
+
+    // Toggle Issued History on & verify drawnReqNo + Reprint slip button appear, then hide back to clear state
+    await page.click('#btn-toggle-inward-issued-queue');
+    await expect(page.locator('#grn-queue-req-select')).toBeVisible();
+    await expect(page.locator('#grn-queue-req-select')).toContainText(drawnReqNo);
+    await expect(page.locator('#btn-reprint-issued-req')).toBeVisible();
+    await page.click('#btn-toggle-inward-issued-queue');
+    await expect(page.locator('[data-testid="inw-queue-all-issued"]')).toBeVisible();
+
+    const overflowPx = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflowPx).toBe(0);
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Silent handoff refresh: Inward Register and Packing Hall sync requisitions & issuance without F5 or re-login', async ({ page, browser }) => {
+    const runtimeErrors: string[] = [];
+    const trackErrors = (targetPage: typeof page, label: string) => {
+      targetPage.on('pageerror', err => runtimeErrors.push(`${label} pageerror: ${err.message}`));
+      targetPage.on('console', msg => {
+        if (msg.type() === 'error') runtimeErrors.push(`${label} console.error: ${msg.text()}`);
+      });
+      targetPage.on('response', res => {
+        if (res.status() >= 500) runtimeErrors.push(`${label} http ${res.status()}: ${res.url()}`);
+      });
+    };
+    trackErrors(page, 'admin');
+
+    const suffix = Date.now().toString().slice(-6);
+    const inwUser = `silent.inw.${suffix}`;
+    const inwPass = 'Silent-Inw-2026!';
+    const packUser = `silent.pack.${suffix}`;
+    const packPass = 'Silent-Pack-2026!';
+
+    // 1. Admin creates INWARD_CLERK + PACKING_SUPERVISOR, creates Maker A order, and receives 50 pairs
+    await authenticateAsSuperUser(page);
+    await page.click('.admin-tab-btn[data-admin-tab="users"]');
+    await page.fill('#admin-user-name', 'Silent Inward Clerk');
+    await page.fill('#admin-user-username', inwUser);
+    await page.fill('#admin-user-password', inwPass);
+    await page.selectOption('#admin-user-role', 'INWARD_CLERK');
+    await page.click('#btn-admin-add-system-user');
+    await expect(page.locator('.su-user-table')).toContainText(inwUser);
+
+    await page.fill('#admin-user-name', 'Silent Packing Supervisor');
+    await page.fill('#admin-user-username', packUser);
+    await page.fill('#admin-user-password', packPass);
+    await page.selectOption('#admin-user-role', 'PACKING_SUPERVISOR');
+    await page.click('#btn-admin-add-system-user');
+    await expect(page.locator('.su-user-table')).toContainText(packUser);
+
+    await page.click('.admin-tab-btn[data-admin-tab="orders"]');
+    await page.selectOption('#admin-pending-order-buyer', 'Globex Supply Co.');
+    await page.selectOption('#admin-pending-order-maker', 'Maker A');
+    await page.selectOption('#admin-pending-order-article', 'Model A1');
+    await page.fill('#admin-pending-order-po', `PO-SILENT-${suffix}`);
+    await page.fill('.admin-order-size-val[data-size="7"]', '50');
+    const [ordRes] = await Promise.all([
+      page.waitForResponse(res => res.url().includes('/api/admin/pending-orders') && res.request().method() === 'POST' && res.status() === 200),
+      page.click('#btn-admin-add-pending-order')
+    ]);
+    const orderId: string = (await ordRes.json()).data.orderId;
+
+    await page.click('.admin-tab-btn[data-admin-tab="tracking"]');
+    await page.click(`button[data-su-action="quick-receive-grn"][data-order-id="${orderId}"]`);
+    await page.fill('#grn-received-from', 'Silent Seed Driver');
+    await page.fill('.grn-size-val[data-size="7"]', '50');
+    await page.click('#btn-print-grn-slip');
+    await expect(page.locator('#global-modal.open')).toBeVisible();
+    await page.click('#modal-btn-close');
+
+    // 2. Open two separate device sessions (Inward Register & Packing Hall) with accelerated silent poll interval
+    const inwardContext = await browser.newContext();
+    const packingContext = await browser.newContext();
+    const inwardPage = await inwardContext.newPage();
+    const packingPage = await packingContext.newPage();
+    trackErrors(inwardPage, 'inward');
+    trackErrors(packingPage, 'packing');
+
+    for (const p of [inwardPage, packingPage]) {
+      await p.addInitScript(() => {
+        (window as any).__MES_SILENT_POLL_MS = 400;
+        window.print = () => {};
+      });
+    }
+
+    try {
+      await inwardPage.goto('/');
+      await inwardPage.fill('#auth-username', inwUser);
+      await inwardPage.fill('#auth-password', inwPass);
+      await inwardPage.click('#auth-form button[type="submit"]');
+      await expect(inwardPage.locator('[data-testid="inward-register-screen"]')).toBeVisible();
+      await expect(inwardPage.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+
+      // Type a draft carrier note on Inward Register before handoff arrives
+      await inwardPage.fill('#grn-received-from', 'Draft Carrier Note');
+
+      await packingPage.goto('/');
+      await packingPage.fill('#auth-username', packUser);
+      await packingPage.fill('#auth-password', packPass);
+      await packingPage.click('#auth-form button[type="submit"]');
+      await expect(packingPage.locator('#wip-batch-select')).toBeVisible();
+      await expect(packingPage.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+
+      // 3. Packing Hall creates REQ -> Inward Register receives it silently without F5 or re-login, preserving typed draft
+      await packingPage.click('#btn-wip-new-req');
+      await expect(packingPage.locator('#new-req-parent-order')).toBeVisible();
+      await packingPage.selectOption('#new-req-parent-order', orderId);
+      await expect(packingPage.locator('#btn-confirm-lot-draw')).toBeVisible();
+      await packingPage.fill('.req-size-val[data-size="7"]', '50');
+      const [reqRes] = await Promise.all([
+        packingPage.waitForResponse(res => res.url().includes(`/api/orders/${encodeURIComponent(orderId)}/requisitions`) && res.status() === 200),
+        packingPage.click('#btn-confirm-lot-draw')
+      ]);
+      const reqNumber: string = (await reqRes.json()).data.reqNumber;
+      await expect(packingPage.locator('#global-modal.open')).toHaveCount(0);
+      await expect(packingPage.locator('#wip-stg1-in')).toHaveText('0');
+
+      await expect(inwardPage.locator('#grn-queue-req-select')).toContainText(reqNumber, { timeout: 6000 });
+      await expect(inwardPage.locator('#btn-issue-req-to-packing')).toBeVisible();
+      await expect(inwardPage.locator('#grn-received-from')).toHaveValue('Draft Carrier Note');
+
+      // 4. Inward Register issues REQ -> Packing Hall unlocks Stage 1 silently without F5 or re-login
+      await inwardPage.selectOption('#grn-queue-req-select', reqNumber);
+      await inwardPage.click('#btn-issue-req-to-packing');
+      await expect(inwardPage.locator('#global-modal.open')).toBeVisible();
+      await inwardPage.click('#modal-btn-close');
+
+      await expect(packingPage.locator('#wip-stg1-in')).toHaveText('50', { timeout: 6000 });
+      await expect(packingPage.locator('#btn-wip-step1')).toBeEnabled();
+    } finally {
+      await inwardContext.close();
+      await packingContext.close();
+    }
+
+    expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Packing Hall slim active requisition dropdown: active Stage 1-4 only, sorted, zero ghost/handed-off/ORDER clutter', async ({ page, browser }) => {
+    const runtimeErrors: string[] = [];
+    page.on('pageerror', err => runtimeErrors.push(`pageerror: ${err.message}`));
+    page.on('console', msg => {
+      if (msg.type() === 'error') runtimeErrors.push(`console.error: ${msg.text()}`);
+    });
+    page.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    const suffix = Date.now().toString().slice(-6);
+    const packUser = `slim.pack.${suffix}`;
+    const packPass = 'Slim-Pack-2026!';
+
+    await authenticateAsSuperUser(page);
+
+    // Seed a Packing Supervisor plus 1 active Stage 1-4 REQ, 1 Awaiting Final QC REQ, 1 Stage 5 REQ, 1 Completed REQ, and unclaimed dock stock
+    const seeded = await page.evaluate(async ({ packUser, packPass, suffix }) => {
+      const post = async (url: string, body: Record<string, unknown>) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(`${url} failed: ${json.error || res.status}`);
+        return json.data;
+      };
+
+      await post('/api/admin/users', {
+        name: 'Slim Dropdown Packing Supervisor',
+        username: packUser,
+        password: packPass,
+        role: 'PACKING_SUPERVISOR'
+      });
+
+      const orderRes = await post('/api/admin/pending-orders', {
+        buyer: 'Slim Buyer Co.',
+        maker: 'Raja',
+        po: `PO-SLIM-${suffix}`,
+        article: `SLIM-ART-${suffix}`,
+        color: 'Black',
+        sizeFormat: 'LEGACY_7_11',
+        sizes: { '7': 500, '8': 0, '9': 0, '10': 0, '11': 0 },
+        notes: 'Slim dropdown test'
+      });
+      const orderId = orderRes.order_id || orderRes.orderId;
+
+      await post('/api/store/receivings', {
+        orderId,
+        makerContractor: 'Raja',
+        receivedFrom: 'Raja',
+        customerName: 'Slim Buyer Co.',
+        poNumber: `PO-SLIM-${suffix}`,
+        articleName: `SLIM-ART-${suffix}`,
+        colorShade: 'Black',
+        rcvdPairs: 400,
+        sizes: { '7': 400, '8': 0, '9': 0, '10': 0, '11': 0 },
+        remarks: 'Slim GRN'
+      });
+
+      const mkReq = async () => {
+        const req = await post(`/api/orders/${encodeURIComponent(orderId)}/requisitions`, {
+          sizes: { '7': 50, '8': 0, '9': 0, '10': 0, '11': 0 }
+        });
+        const reqNo: string = req.req_number;
+        await post(`/api/orders/${encodeURIComponent(orderId)}/issue-req`, { reqNumber: reqNo, requestedPairs: 50 });
+        return reqNo;
+      };
+
+      const completeThroughStage4 = async (reqNo: string) => {
+        await post(`/api/wip/${encodeURIComponent(reqNo)}/step1-checking`, { goodPairs: 50, defectPairs: 0 });
+        await post(`/api/wip/${encodeURIComponent(reqNo)}/step2-ironing`, { goodPairs: 50, defectPairs: 0 });
+        await post(`/api/wip/${encodeURIComponent(reqNo)}/step3-matching`, { goodPairs: 50, defectPairs: 0 });
+        const matReq = await post(`/api/wip/${encodeURIComponent(reqNo)}/material-requisition`, {});
+        await post(`/api/material-requisitions/${encodeURIComponent(matReq.mat_req_number)}/issue`, {});
+        await post(`/api/wip/${encodeURIComponent(reqNo)}/step4-packing`, { packedPairs: 50 });
+      };
+
+      // Completed lot (all 50 pairs packed into 1 carton)
+      const completedReq = await mkReq();
+      await completeThroughStage4(completedReq);
+      await post(`/api/qc/${encodeURIComponent(completedReq)}/aql-audit`, {
+        foundDefects: 0,
+        inspectorId: '4402',
+        inspectorName: 'Tariq Mehmood'
+      });
+      await post(`/api/wip/${encodeURIComponent(completedReq)}/step5-cartons-gated`, {
+        pairsPerCarton: 50,
+        pairsToPack: 50,
+        dimensionsCm: '60x40x35',
+        shippingMode: 'SEA',
+        sealPrefix: 'SLIM'
+      });
+
+      // Stage 5 lot (QC approved, waiting cartons)
+      const stage5Req = await mkReq();
+      await completeThroughStage4(stage5Req);
+      await post(`/api/qc/${encodeURIComponent(stage5Req)}/aql-audit`, {
+        foundDefects: 0,
+        inspectorId: '4402',
+        inspectorName: 'Tariq Mehmood'
+      });
+
+      // Awaiting Final QC lot (Stage 4 complete, QC unapproved)
+      const awaitingQcReq = await mkReq();
+      await completeThroughStage4(awaitingQcReq);
+
+      // Two active Stage 1-4 lots
+      const activeStage1Req = await mkReq();
+      const activeStage2Req = await mkReq();
+      await post(`/api/wip/${encodeURIComponent(activeStage2Req)}/step1-checking`, { goodPairs: 50, defectPairs: 0 });
+
+      // Stage 5 lot with repaired Alteration Bay stock received back at Inward -> must surface as REQ in Packing Hall
+      const reworkBackAtInwardReq = await mkReq();
+      await post(`/api/wip/${encodeURIComponent(reworkBackAtInwardReq)}/step1-checking`, {
+        goodPairs: 40,
+        defectPairs: 10,
+        defectReason: 'Open Seam'
+      });
+      await post(`/api/wip/${encodeURIComponent(reworkBackAtInwardReq)}/step2-ironing`, { goodPairs: 40, defectPairs: 0 });
+      await post(`/api/wip/${encodeURIComponent(reworkBackAtInwardReq)}/step3-matching`, { goodPairs: 40, defectPairs: 0 });
+      const rwMatReq = await post(`/api/wip/${encodeURIComponent(reworkBackAtInwardReq)}/material-requisition`, {});
+      await post(`/api/material-requisitions/${encodeURIComponent(rwMatReq.mat_req_number)}/issue`, {});
+      await post(`/api/wip/${encodeURIComponent(reworkBackAtInwardReq)}/step4-packing`, { packedPairs: 40 });
+      await post(`/api/qc/${encodeURIComponent(reworkBackAtInwardReq)}/aql-audit`, {
+        foundDefects: 0,
+        inspectorId: '4402',
+        inspectorName: 'Tariq Mehmood'
+      });
+      await post('/api/alterations/assign', {
+        reqNumber: reworkBackAtInwardReq,
+        tailorName: 'Ustad Tariq',
+        pairsCount: 10
+      });
+      const altId = await (async () => {
+        const res = await fetch('/api/alterations');
+        const json = await res.json();
+        const found = (json.data || []).find((a: any) => a.req_number === reworkBackAtInwardReq && a.status === 'SENT_FOR_ALTERATION');
+        if (!found) throw new Error(`Missing alteration ticket for ${reworkBackAtInwardReq}`);
+        return found.id;
+      })();
+      await post(`/api/alterations/${altId}/receive-inward`, { pairsCount: 10, tailorName: 'Ustad Tariq' });
+
+      return { orderId, completedReq, stage5Req, awaitingQcReq, activeStage1Req, activeStage2Req, reworkBackAtInwardReq };
+    }, { packUser, packPass, suffix });
+
+    // Sign in on a clean Packing Supervisor browser context
+    const packingCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const packingPage = await packingCtx.newPage();
+    packingPage.on('pageerror', err => runtimeErrors.push(`pack pageerror: ${err.message}`));
+    packingPage.on('console', msg => {
+      if (msg.type() === 'error') runtimeErrors.push(`pack console.error: ${msg.text()}`);
+    });
+    packingPage.on('response', res => {
+      if (res.status() >= 500) runtimeErrors.push(`pack HTTP ${res.status()} on ${res.url()}`);
+    });
+
+    try {
+      await packingPage.goto('/');
+      await packingPage.fill('#auth-username', packUser);
+      await packingPage.fill('#auth-password', packPass);
+      await packingPage.click('#auth-form button[type="submit"]');
+      await expect(packingPage.locator('#root')).toHaveAttribute('data-sync-ready', 'true');
+      await expect(packingPage.locator('#wip-batch-select')).toBeVisible();
+
+      const optionInfo = await packingPage.evaluate(() => {
+        const sel = document.getElementById('wip-batch-select') as HTMLSelectElement | null;
+        if (!sel) return { values: [] as string[], texts: [] as string[], optgroups: 0, orderOpts: 0 };
+        const opts = Array.from(sel.options);
+        return {
+          values: opts.map(o => o.value),
+          texts: opts.map(o => (o.textContent || '').trim()),
+          optgroups: sel.querySelectorAll('optgroup').length,
+          orderOpts: opts.filter(o => o.value.startsWith('ORDER:')).length
+        };
+      });
+
+      expect(optionInfo.optgroups).toBe(0);
+      expect(optionInfo.orderOpts).toBe(0);
+      expect(optionInfo.values).toContain(seeded.activeStage1Req);
+      expect(optionInfo.values).toContain(seeded.activeStage2Req);
+      expect(optionInfo.values).toContain(seeded.reworkBackAtInwardReq);
+      expect(optionInfo.values).not.toContain(seeded.completedReq);
+      expect(optionInfo.values).not.toContain(seeded.stage5Req);
+      expect(optionInfo.values).not.toContain(seeded.awaitingQcReq);
+
+      const joinedTexts = optionInfo.texts.join('\n');
+      expect(joinedTexts).not.toContain('No active requisition');
+      expect(joinedTexts).not.toContain('[Stage');
+      expect(joinedTexts).not.toContain('Completed');
+      expect(joinedTexts).not.toContain('Stage 5');
+      expect(joinedTexts).not.toContain('Awaiting Final QC');
+
+      const s1Text = optionInfo.texts.find(t => t.startsWith(seeded.activeStage1Req)) || '';
+      expect(s1Text).toBe(`${seeded.activeStage1Req} · SLIM-ART-${suffix}`);
+      const reworkOptionText = optionInfo.texts.find(t => t.startsWith(seeded.reworkBackAtInwardReq)) || '';
+      expect(reworkOptionText).toContain('Rework at Inward');
+
+      // Rework received back at Inward from Alteration Bay surfaces prominently with REQ number + Request re-issue button
+      await expect(packingPage.locator('[data-testid="wip-rework-inward-banner"]')).toBeVisible();
+      await expect(packingPage.locator('[data-testid="wip-rework-inward-banner"]')).toContainText(seeded.reworkBackAtInwardReq);
+      await expect(packingPage.locator(`[data-testid="wip-rework-inward-banner"] [data-packing-action="request-rework-reissue"][data-req-number="${seeded.reworkBackAtInwardReq}"]`)).toBeVisible();
+
+      // Bar graph shows ONLY selected requisition (no other REQs, no Stage 5 / handed-off lots)
+      const selectedReqBefore = await packingPage.locator('#wip-batch-select').inputValue();
+      const chartText = await packingPage.locator('[data-testid="wip-analytics-dashboard"]').innerText();
+      expect(chartText).toContain(selectedReqBefore);
+      expect(chartText).not.toContain(seeded.completedReq);
+      expect(chartText).not.toContain(seeded.stage5Req);
+      expect(chartText).not.toContain(seeded.awaitingQcReq);
+      await expect(packingPage.locator('[data-testid="wip-chart-plot"] [data-series="stage5"]')).toHaveCount(0);
+
+      // Switching dropdown updates chart to new requisition and produces 0 bottom-center toast popups
+      const otherReq = selectedReqBefore === seeded.activeStage1Req ? seeded.activeStage2Req : seeded.activeStage1Req;
+      await packingPage.selectOption('#wip-batch-select', otherReq);
+      await expect(packingPage.locator('[data-testid="wip-analytics-dashboard"]')).toContainText(otherReq);
+      await expect(packingPage.locator('[data-testid="wip-analytics-dashboard"]')).not.toContainText(selectedReqBefore);
+      await expect(packingPage.locator('.toast-message')).toHaveCount(0);
+
+      // Bottom Super User carton manifest & redundant alteration table & Carton Labels button are hidden for Packing Supervisor
+      await expect(packingPage.locator('text=Active Alteration / Repair Loop')).toHaveCount(0);
+      await expect(packingPage.locator('text=Master Shipping Carton Manifest')).toHaveCount(0);
+      await expect(packingPage.locator('#btn-wip-print-labels')).toHaveCount(0);
+
+      // Verify ascending sort order across all visible active options
+      const sorted = [...optionInfo.values].sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+      );
+      expect(optionInfo.values).toEqual(sorted);
+
+      // Verify + Generate Requisition remains the dedicated flow for unclaimed dock stock
+      await expect(packingPage.locator('#btn-wip-new-req')).toBeEnabled();
+      await packingPage.click('#btn-wip-new-req');
+      await expect(packingPage.locator('#new-req-parent-order')).toContainText(seeded.orderId);
+      await packingPage.click('#global-modal [data-modal-cancel]');
+      await expect(packingPage.locator('#global-modal.open')).toHaveCount(0);
+
+      // Verify 1440px viewport has zero horizontal overflow
+      const overflowPx = await packingPage.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflowPx).toBe(0);
+    } finally {
+      await packingCtx.close();
+    }
+
     expect(runtimeErrors).toEqual([]);
   });
 });

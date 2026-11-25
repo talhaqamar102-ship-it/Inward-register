@@ -55,7 +55,6 @@ declare global {
     handleDefectAction: (id: string, actionText: string) => void;
     toggleQcCheck: (id: string) => void;
     adminDeleteRecord: (table: string, id: string) => void;
-    adminRemoveDropdownItem: (listKey: 'makers' | 'poList', val: string, triggerEl?: HTMLElement | null) => void;
     adminRemovePendingOrder: (orderId: string, triggerEl?: HTMLElement | null) => void;
     adminForceRepair: (altId: number, isScrap: boolean) => void;
     adminToggleOrderExpand: (orderId: string) => void;
@@ -609,7 +608,7 @@ export function registerWindowActions({ lockCurrentSession }: WindowActionDeps):
             const matchedHall = findHallByName(a.maker);
             return {
               maker: a.maker,
-              hallName: matchedHall && matchedHall.stitchers.length > 0 ? matchedHall.name : '',
+              hallName: matchedHall ? matchedHall.name : '',
               stitcherName: '',
               receivedFrom: '',
               sizes: createEmptySizes(scaleCodes)
@@ -621,15 +620,14 @@ export function registerWindowActions({ lockCurrentSession }: WindowActionDeps):
         const defaultMaker = activeAlloc ? activeAlloc.maker : order.maker;
         const defaultSizes = activeAlloc ? (activeAlloc.remainingSizes || activeAlloc.sizes) : (order.sizes || createEmptySizes(scaleCodes));
         const matchedHall = findHallByName(defaultMaker);
-        const hasHallStitchers = Boolean(matchedHall && matchedHall.stitchers.length > 0);
         state.grnForm = {
           pendingOrderId: order.orderId,
           maker: defaultMaker,
-          hallName: hasHallStitchers ? matchedHall!.name : '',
+          hallName: matchedHall ? matchedHall.name : '',
           stitcherName: '',
           article: order.article,
           color: order.color || 'Standard',
-          receivedFrom: hasHallStitchers ? '' : (defaultMaker ? `${defaultMaker} Representative` : ''),
+          receivedFrom: matchedHall ? '' : (defaultMaker ? `${defaultMaker} Representative` : ''),
           rcvdPairs: String(calculateSizeTotal(defaultSizes) || order.totalQty || ''),
           sizeFormat: order.sizeFormat || 'LEGACY_7_11',
           sizeCodes: scaleCodes,
@@ -642,7 +640,6 @@ export function registerWindowActions({ lockCurrentSession }: WindowActionDeps):
     }
     state.activeScreen = 'screen-grn';
     renderApp();
-    showToast(`Loaded Order ${orderId} into Inward Dock to receive next GRN-000X batch.`);
   };
 
   window.adminQuickCreateReqForOrder = function(orderId: string) {
@@ -659,12 +656,10 @@ export function registerWindowActions({ lockCurrentSession }: WindowActionDeps):
       state.activeScreen = 'screen-admin';
       state.adminActiveTab = 'qc-dispatch';
       renderApp();
-      showToast(`Opened Requisition ${normalizeBaseReqNumber(reqNumber)} in QC & Dispatch.`);
       return;
     }
     state.activeScreen = targetScreen;
     renderApp();
-    showToast(`Opened Requisition ${normalizeBaseReqNumber(reqNumber)} in ${targetScreen.replace('screen-', '').toUpperCase()}.`);
   };
 
   window.adminRemovePendingOrder = async function(orderId: string, triggerEl?: HTMLElement | null) {
@@ -715,31 +710,6 @@ export function registerWindowActions({ lockCurrentSession }: WindowActionDeps):
     } catch (e) {
       console.warn(e);
     }
-  };
-
-  window.adminRemoveDropdownItem = async function(
-    listKey: 'makers' | 'poList',
-    val: string,
-    triggerEl?: HTMLElement | null
-  ) {
-    const listLabel = listKey === 'makers' ? 'Contractors / Makers' : 'Purchase Order #';
-    await confirmAndRunAdminAction(
-      `admin:remove-dropdown:${listKey}:${val}`,
-      triggerEl,
-      {
-        title: 'Confirm Remove Registry Item',
-        message: `Remove "${val}" from ${listLabel}?`,
-        detail: 'Future forms will no longer suggest this entry in global dropdowns.',
-        confirmLabel: 'Remove Entry',
-        cancelLabel: 'Keep Entry',
-        tone: 'danger'
-      },
-      async () => {
-        state.dropdownOptions[listKey] = state.dropdownOptions[listKey].filter(item => item !== val);
-        showToast(`Removed "${val}" from dropdown options.`);
-        renderApp();
-      }
-    );
   };
 
   window.adminForceRepair = async function(altId: number, isScrap: boolean) {
@@ -808,7 +778,6 @@ export function registerWindowActions({ lockCurrentSession }: WindowActionDeps):
         splitRows: []
       };
       renderApp();
-      showToast(`Loaded Record #${sr} into editor form.`);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };

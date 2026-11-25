@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { db, backupDatabase, initDatabase } from '../db.js';
 import { AQLService } from './aqlService.js';
-import { createPendingOrder, createPendingOrderBatch, updatePendingOrder, deletePendingOrder } from './orderService.js';
+import {
+  createPendingOrder,
+  createPendingOrderBatch,
+  updatePendingOrder,
+  deletePendingOrder,
+  assignRemainingOrderAllocations
+} from './orderService.js';
 
 const REQUISITION_SIZES = ['7', '8', '9', '10', '11'];
 
@@ -1125,9 +1131,25 @@ export class PackingService {
     const effectiveCustomer = (linkedOrder ? linkedOrder.buyer_name : customerName) || customerName || 'Standard';
     const effectivePo = (linkedOrder ? linkedOrder.po_number : poNumber) || data.pendingOrderId || 'ORD-INWARD';
 
-    const hallNameVal = String(hallName ?? hall_name ?? '').trim();
+    let hallNameVal = String(hallName ?? hall_name ?? '').trim();
     const stitcherNameVal = String(stitcherName ?? stitcher_name ?? '').trim();
     const receivingNoteVal = String(receivingNote ?? receiving_note ?? '').trim();
+
+    if (!hallNameVal && strictInwardEntry) {
+      const linkedSingleMaker =
+        linkedOrder && !String(linkedOrder.maker_contractor || '').includes(',')
+          ? String(linkedOrder.maker_contractor || '').trim()
+          : '';
+      const candidateMaker = String(makerContractor || linkedSingleMaker || '').trim();
+      if (candidateMaker) {
+        const hallFromMaker = db.prepare(
+          `SELECT name FROM halls WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1`
+        ).get(candidateMaker);
+        if (hallFromMaker) {
+          hallNameVal = hallFromMaker.name;
+        }
+      }
+    }
 
     if (!hallNameVal && stitcherNameVal) {
       const err = new Error('Hall is required when specifying a Stitcher.');
@@ -1204,7 +1226,7 @@ export class PackingService {
           throw new Error(`Contractor "${effectiveMakerContractor}" is not allocated to Order ${orderIdVal}`);
         }
         const allocCap = Number(matchedAlloc.total_qty || 0);
-        if (allocCap > 0 && (allocRows.length > 1 || Boolean(strictInwardEntry))) {
+        if (allocCap > 0 && (allocRows.length > 1 || allocCap < orderNum || Boolean(strictInwardEntry))) {
           const priorForMaker = db.prepare(`
             SELECT COALESCE(SUM(rcvd_pairs), 0) AS total_rcvd
             FROM store_receivings
@@ -1247,6 +1269,17 @@ export class PackingService {
             const szRemaining = Number(remainingBySize?.[sz] ?? 0);
             if (szPlanned <= 0 || szRemaining <= 0) {
               throw httpErr(`Size ${sz} has 0 remaining pairs for ${orderIdVal}.`, 400);
+            }
+            if (
+              matchedAllocSummary &&
+              ((stockSummary.contractorAllocations || []).length > 1 ||
+                Number(matchedAllocSummary.totalQty || 0) < orderNum) &&
+              szRcvd > szRemaining
+            ) {
+              throw httpErr(
+                `Receiving ${szRcvd} pairs of Size ${sz} for ${matchedAllocSummary.maker} exceeds their remaining allocation (${szRemaining} pairs left on ${orderIdVal}).`,
+                400
+              );
             }
           }
         }
@@ -1428,28 +1461,32 @@ export class PackingService {
     }
   }
 
+  static getMakers() {
+    try {
+      return db.prepare(`SELECT id, name FROM makers ORDER BY name COLLATE NOCASE ASC`).all().map(r => ({
+        id: Number(r.id),
+        name: String(r.name)
+      }));
+    } catch {
+      return [];
+    }
+  }
+
   static getReceivingDropdowns() {
-    const makers = db.prepare(`
-      SELECT DISTINCT maker_contractor FROM store_receivings ORDER BY maker_contractor
-    `).all().map(r => r.maker_contractor);
-
-    // Standard contractors from sheet
-    const defaultMakers = [
-      'Hall B',
-      'Hall A',
-      'Maker A',
-      'Maker B',
-      'Maker C',
-      'Maker D'
-    ];
-    defaultMakers.forEach(m => {
-      if (!makers.includes(m)) makers.push(m);
-    });
-
     const halls = this.getHallsWithStitchers();
-    halls.forEach(h => {
-      if (!makers.includes(h.name)) makers.push(h.name);
-    });
+    const externalMakers = this.getMakers();
+    const makers = [];
+    const seenMakers = new Set();
+    const pushMaker = (name) => {
+      const clean = String(name || '').trim();
+      if (!clean) return;
+      const key = clean.toLowerCase();
+      if (seenMakers.has(key)) return;
+      seenMakers.add(key);
+      makers.push(clean);
+    };
+    halls.forEach(h => pushMaker(h.name));
+    externalMakers.forEach(m => pushMaker(m.name));
 
     const customers = db.prepare(`
       SELECT DISTINCT customer_name FROM store_receivings
@@ -1466,11 +1503,14 @@ export class PackingService {
     `).all().map(r => r.article_name || r.name);
 
     const poList = db.prepare(`
-      SELECT DISTINCT po_number FROM store_receivings WHERE po_number IS NOT NULL AND po_number != '' ORDER BY po_number
+      SELECT DISTINCT po_number FROM pending_orders WHERE deleted_at IS NULL AND po_number IS NOT NULL AND TRIM(po_number) != ''
+      UNION
+      SELECT DISTINCT po_number FROM store_receivings WHERE po_number IS NOT NULL AND TRIM(po_number) != ''
+      ORDER BY 1
     `).all().map(r => r.po_number);
 
     const sizeStandards = this.getSizeStandards();
-    return { makers, customers, articles, poList, sizeStandards, halls };
+    return { makers, externalMakers, customers, articles, poList, sizeStandards, halls };
   }
 
   // --- PACKAGING BOM LOOKUP ---
@@ -2258,6 +2298,19 @@ export class PackingService {
       scaleCodes.map(sz => [sz, Math.max(0, Number(receivedSizes[sz] || 0) - Number(requestedSizes[sz] || 0))])
     );
 
+    const assignedSizes = Object.fromEntries(scaleCodes.map(sz => [sz, 0]));
+    let assignedPairs = 0;
+    for (const alloc of contractorAllocations) {
+      for (const sz of scaleCodes) {
+        assignedSizes[sz] += Number(alloc.sizes?.[sz] || 0);
+      }
+      assignedPairs += Number(alloc.totalQty || 0);
+    }
+    const unassignedSizes = Object.fromEntries(
+      scaleCodes.map(sz => [sz, Math.max(0, Number(plannedSizes[sz] || 0) - Number(assignedSizes[sz] || 0))])
+    );
+    const unassignedPairs = scaleCodes.reduce((sum, sz) => sum + unassignedSizes[sz], 0);
+
     return {
       sizeFormat,
       scaleCodes,
@@ -2272,6 +2325,9 @@ export class PackingService {
       availableDockPairs,
       unclaimedDockPairs,
       unclaimedDockSizes,
+      assignedPairs,
+      unassignedPairs,
+      unassignedSizes,
       contractorAllocations
     };
   }
@@ -2294,6 +2350,9 @@ export class PackingService {
           sizeCodes: stock.scaleCodes,
           sizes: stock.plannedSizes,
           totalQty: Number(r.total_qty || 0),
+          assignedQty: stock.assignedPairs,
+          unassignedQty: stock.unassignedPairs,
+          unassignedSizes: stock.unassignedSizes,
           dueDate: r.due_date || '',
           createdAt: r.created_at || '',
           notes: r.notes || '',
@@ -2341,6 +2400,16 @@ export class PackingService {
       recordAuditLog: entry => this.recordAuditLog(entry)
     });
     return { orderId, orders: this.getPendingOrders() };
+  }
+
+  static assignRemainingOrderAllocationsAdmin(orderId, payload, actor = 'Super User', role = 'SUPER_USER') {
+    this.enforceRolePermission(role, 'ORDER_CREATE');
+    const result = assignRemainingOrderAllocations(db, orderId, payload, {
+      actor,
+      role,
+      recordAuditLog: entry => this.recordAuditLog(entry)
+    });
+    return { ...result, orders: this.getPendingOrders() };
   }
 
   static deletePendingOrderAdmin(orderId, actor = 'Super User', role = 'SUPER_USER') {
@@ -2422,12 +2491,30 @@ export class PackingService {
     return this.getCustomers();
   }
 
+  static normalizeColorOptions(colorOptions, colorSpec = '') {
+    const rawList = Array.isArray(colorOptions) ? colorOptions : [];
+    const out = [];
+    const seen = new Set();
+    const pushClean = (val) => {
+      const cleaned = String(val || '').trim();
+      if (!cleaned) return;
+      const key = cleaned.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(cleaned);
+    };
+    for (const item of rawList) pushClean(item);
+    if (out.length === 0 && colorSpec) pushClean(colorSpec);
+    return out;
+  }
+
   static upsertProductAdmin({
     id,
     name,
     customerId,
     articleCode,
     colorSpec,
+    colorOptions,
     sizeFormat,
     polybagPerPair,
     silicaGelPerPair,
@@ -2439,16 +2526,26 @@ export class PackingService {
     const slug = cleanName.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'ITEM';
     const prodId = id || `GLV-${slug}-${randomUUID().slice(0, 6).toUpperCase()}`;
     const format = String(sizeFormat || 'ALPHA_2XS_5XL').trim() || 'ALPHA_2XS_5XL';
+    const normalizedColors = this.normalizeColorOptions(colorOptions, colorSpec);
+    const primaryColor = normalizedColors[0] || String(colorSpec || '').trim();
+    const existingProd = id ? db.prepare(`SELECT pairs_per_carton FROM products WHERE id = ?`).get(id) : null;
+    const resolvedPairsPerCarton =
+      pairsPerCarton !== undefined && pairsPerCarton !== null && pairsPerCarton !== ''
+        ? Math.max(1, Number(pairsPerCarton))
+        : Number(existingProd?.pairs_per_carton ?? 50);
+
     db.prepare(`
       INSERT INTO products (
-        id, name, raw_name, article_code, raw_color, color_spec, size_format,
+        id, name, raw_name, article_code, raw_color, color_spec, color_options_json, size_format,
         customer_id, polybag_per_pair, silica_gel_per_pair, stickers_per_pair, pairs_per_carton
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         article_code = excluded.article_code,
+        raw_color = excluded.raw_color,
         color_spec = excluded.color_spec,
+        color_options_json = excluded.color_options_json,
         size_format = excluded.size_format,
         customer_id = excluded.customer_id,
         polybag_per_pair = excluded.polybag_per_pair,
@@ -2460,16 +2557,142 @@ export class PackingService {
       cleanName,
       cleanName,
       String(articleCode || '').trim(),
-      String(colorSpec || '').trim(),
-      String(colorSpec || '').trim(),
+      primaryColor,
+      primaryColor,
+      JSON.stringify(normalizedColors),
       format,
       customerId,
       Number(polybagPerPair ?? 1),
       Number(silicaGelPerPair ?? 1),
       Number(stickersPerPair ?? 2),
-      Number(pairsPerCarton ?? 50)
+      resolvedPairsPerCarton
     );
     return this.getProducts();
+  }
+
+  static updateProductCartonPackingAdmin({
+    productId,
+    pairsPerCarton,
+    stickersPerPair,
+    polybagPerPair,
+    silicaGelPerPair,
+    actor = 'Super User',
+    role = 'SUPER_USER'
+  }) {
+    if (String(role || 'SUPER_USER').trim().toUpperCase() !== 'SUPER_USER') {
+      throw httpErr(`RBAC Forbidden: Role ${role} is not permitted to update carton packing.`, 403);
+    }
+    const cleanId = String(productId || '').trim();
+    if (!cleanId) {
+      throw httpErr('Article is required.', 400);
+    }
+    const pairs = Number(pairsPerCarton);
+    if (!Number.isInteger(pairs) || pairs < 1) {
+      throw httpErr('Pairs per carton must be a whole number of at least 1.', 400);
+    }
+    const existing = db.prepare(`
+      SELECT id, name, pairs_per_carton, polybag_per_pair, silica_gel_per_pair, stickers_per_pair
+      FROM products WHERE id = ?
+    `).get(cleanId);
+    if (!existing) {
+      throw httpErr('Article not found.', 404);
+    }
+
+    const nextStickers = stickersPerPair !== undefined ? Number(stickersPerPair) : Number(existing.stickers_per_pair ?? 2);
+    if (!Number.isInteger(nextStickers) || nextStickers < 1) {
+      throw httpErr('Stickers per pair must be a whole number of at least 1.', 400);
+    }
+    const nextPolybag = polybagPerPair !== undefined ? Number(polybagPerPair) : Number(existing.polybag_per_pair ?? 1);
+    if (!Number.isInteger(nextPolybag) || nextPolybag < 0) {
+      throw httpErr('Polybags per pair must be a whole number >= 0.', 400);
+    }
+    const nextSilica = silicaGelPerPair !== undefined ? Number(silicaGelPerPair) : Number(existing.silica_gel_per_pair ?? 1);
+    if (!Number.isInteger(nextSilica) || nextSilica < 0) {
+      throw httpErr('Silica gel per pair must be a whole number >= 0.', 400);
+    }
+
+    db.prepare(`
+      UPDATE products
+      SET pairs_per_carton = ?, polybag_per_pair = ?, silica_gel_per_pair = ?, stickers_per_pair = ?
+      WHERE id = ?
+    `).run(pairs, nextPolybag, nextSilica, nextStickers, cleanId);
+
+    this.recordAuditLog({
+      actor,
+      role,
+      action: 'PRODUCT_CARTON_UPDATE',
+      entityId: cleanId,
+      beforeSummary: `${existing.name}: ${existing.pairs_per_carton} prs/ctn, ${existing.stickers_per_pair} stickers/pr`,
+      afterSummary: `${existing.name}: ${pairs} prs/ctn, ${nextStickers} stickers/pr`
+    });
+    return this.getProducts();
+  }
+
+  static createMakerAdmin(name, actor = 'Super User', role = 'SUPER_USER') {
+    if (String(role || 'SUPER_USER').trim().toUpperCase() !== 'SUPER_USER') {
+      throw httpErr(`RBAC Forbidden: Role ${role} is not permitted to manage Contractors / Makers.`, 403);
+    }
+    const cleanName = String(name || '').trim();
+    if (!cleanName) {
+      throw httpErr('Contractor / Maker name is required.', 400);
+    }
+    const duplicateMaker = db.prepare(`SELECT id FROM makers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1`).get(cleanName);
+    if (duplicateMaker) {
+      throw httpErr(`Contractor / Maker "${cleanName}" already exists.`, 409);
+    }
+    const hallCollision = db.prepare(`SELECT id FROM halls WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1`).get(cleanName);
+    if (hallCollision) {
+      throw httpErr(`"${cleanName}" already exists as an Internal Hall.`, 409);
+    }
+    const info = db.prepare(`INSERT INTO makers (name) VALUES (?)`).run(cleanName);
+    this.recordAuditLog({
+      actor,
+      role,
+      action: 'MAKER_CREATE',
+      entityId: cleanName,
+      beforeSummary: 'Contractors / Makers Registry',
+      afterSummary: `Added Contractor ${cleanName}`
+    });
+    const dropdowns = this.getReceivingDropdowns();
+    return {
+      id: Number(info.lastInsertRowid),
+      name: cleanName,
+      externalMakers: dropdowns.externalMakers,
+      makers: dropdowns.makers
+    };
+  }
+
+  static deleteMakerAdmin(makerId, actor = 'Super User', role = 'SUPER_USER') {
+    if (String(role || 'SUPER_USER').trim().toUpperCase() !== 'SUPER_USER') {
+      throw httpErr(`RBAC Forbidden: Role ${role} is not permitted to manage Contractors / Makers.`, 403);
+    }
+    const numericId = Number(makerId);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      throw httpErr('Valid contractor id is required.', 400);
+    }
+    const maker = db.prepare(`SELECT id, name FROM makers WHERE id = ?`).get(numericId);
+    if (!maker) {
+      throw httpErr('Contractor / Maker not found.', 404);
+    }
+    runAtomicWipStep(() => {
+      db.prepare(`DELETE FROM makers WHERE id = ?`).run(numericId);
+      this.recordAuditLog({
+        actor,
+        role,
+        action: 'MAKER_DELETE',
+        entityId: maker.name,
+        beforeSummary: `Contractor ${maker.name}`,
+        afterSummary: 'Deleted Contractor (historical orders/GRNs preserved)'
+      });
+    });
+    const dropdowns = this.getReceivingDropdowns();
+    return {
+      deleted: true,
+      makerId: numericId,
+      makerName: maker.name,
+      externalMakers: dropdowns.externalMakers,
+      makers: dropdowns.makers
+    };
   }
 
   static createHallAdmin(name, actor = 'Super User', role = 'SUPER_USER') {
@@ -3088,6 +3311,24 @@ export class PackingService {
     });
 
     return db.prepare(`SELECT * FROM pending_orders WHERE order_id = ?`).get(orderId);
+  }
+
+  /**
+   * Lightweight 1-query change stamp across handoff tables (requisitions, GRNs, orders, alterations, audit log)
+   * so LAN clients poll every ~15s with near-zero SQLite/bandwidth overhead when idle.
+   */
+  static getSyncStamp() {
+    const row = db.prepare(`
+      SELECT
+        (SELECT COUNT(*) || ':' || COALESCE(SUM(CASE WHEN status = 'PENDING' AND COALESCE(is_voided, 0) = 0 THEN 1 ELSE 0 END), 0) || ':' || COALESCE(SUM(COALESCE(issued_pairs, 0)), 0) || ':' || COALESCE(MAX(COALESCE(issued_at, created_at)), '') FROM glove_requisitions) AS reqStamp,
+        (SELECT COUNT(*) || ':' || COALESCE(SUM(COALESCE(rcvd_pairs, 0)), 0) || ':' || COALESCE(SUM(COALESCE(is_voided, 0)), 0) || ':' || COALESCE(MAX(id), 0) FROM store_receivings) AS rcvStamp,
+        (SELECT COUNT(*) || ':' || COALESCE(SUM(COALESCE(total_qty, 0)), 0) || ':' || COALESCE(MAX(order_id), '') FROM active_orders) AS ordStamp,
+        (SELECT COUNT(*) || ':' || COALESCE(SUM(CASE WHEN status = 'SENT_FOR_ALTERATION' THEN 1 ELSE 0 END), 0) || ':' || COALESCE(MAX(returned_at), '') || ':' || COALESCE(MAX(id), 0) FROM alterations) AS altStamp,
+        (SELECT COALESCE(MAX(id), 0) FROM audit_trail) AS auditId
+    `).get();
+    return {
+      stamp: `${row.reqStamp}|${row.rcvStamp}|${row.ordStamp}|${row.altStamp}|${row.auditId}`
+    };
   }
 }
 

@@ -249,7 +249,7 @@ export function attachGRNHandlers(): void {
         const matchedHall = findHallByName(a.maker);
         return {
           maker: a.maker,
-          hallName: matchedHall && matchedHall.stitchers.length > 0 ? matchedHall.name : '',
+          hallName: matchedHall ? matchedHall.name : '',
           stitcherName: '',
           receivedFrom: '',
           sizes: createEmptySizes(activeCodes)
@@ -258,10 +258,9 @@ export function attachGRNHandlers(): void {
     } else {
       state.grnForm.splitRows = [];
       const matchedHall = findHallByName(filled.maker);
-      const hasHallStitchers = Boolean(matchedHall && matchedHall.stitchers.length > 0);
-      state.grnForm.hallName = hasHallStitchers ? matchedHall!.name : '';
+      state.grnForm.hallName = matchedHall ? matchedHall.name : '';
       state.grnForm.stitcherName = '';
-      if (hasHallStitchers) {
+      if (matchedHall) {
         if (state.grnForm.receivedFrom.endsWith(' Representative')) {
           state.grnForm.receivedFrom = '';
         }
@@ -284,10 +283,9 @@ export function attachGRNHandlers(): void {
     const prevHall = state.grnForm.hallName;
     state.grnForm.maker = makerSelect.value;
     const matchedHall = findHallByName(state.grnForm.maker);
-    const hasHallStitchers = Boolean(matchedHall && matchedHall.stitchers.length > 0);
-    state.grnForm.hallName = hasHallStitchers ? matchedHall!.name : '';
+    state.grnForm.hallName = matchedHall ? matchedHall.name : '';
     state.grnForm.stitcherName = '';
-    if (hasHallStitchers) {
+    if (matchedHall) {
       if (state.grnForm.receivedFrom.endsWith(' Representative')) {
         state.grnForm.receivedFrom = '';
       }
@@ -296,7 +294,7 @@ export function attachGRNHandlers(): void {
       if (receivedFromInput) receivedFromInput.value = state.grnForm.receivedFrom;
     }
     syncSizesAndReceived();
-    if (hasSplit || prevHall !== state.grnForm.hallName || hasHallStitchers) {
+    if (hasSplit || prevHall !== state.grnForm.hallName || Boolean(matchedHall)) {
       renderApp();
     }
   });
@@ -579,10 +577,11 @@ export function attachGRNHandlers(): void {
         const rfInp = document.querySelector<HTMLElement>(`.grn-split-received-from[data-split-idx="${item.idx}"]`);
         const stitcherSel = document.querySelector<HTMLElement>(`.grn-split-stitcher[data-split-idx="${item.idx}"]`);
         const rowHall = findHallByName(item.row.maker);
-        const hasHallStitchers = Boolean(rowHall && rowHall.stitchers.length > 0);
-        if (hasHallStitchers) {
-          if (!item.row.stitcherName?.trim()) {
-            missingSenderFields.push([stitcherSel, `Select a stitcher from ${rowHall!.name}.`]);
+        if (rowHall) {
+          if (rowHall.stitchers.length === 0) {
+            missingSenderFields.push([stitcherSel, `Add stitchers to ${rowHall.name} in Master Registries before receiving.`]);
+          } else if (!item.row.stitcherName?.trim()) {
+            missingSenderFields.push([stitcherSel, `Select a stitcher from ${rowHall.name}.`]);
           } else {
             applyFieldValidationErrors([[stitcherSel, ''], [rfInp, '']]);
           }
@@ -609,18 +608,17 @@ export function attachGRNHandlers(): void {
       const savedBatches: GrnSlipParams[] = [];
       for (const item of activeRows) {
         const rowHall = findHallByName(item.row.maker);
-        const hasHallStitchers = Boolean(rowHall && rowHall.stitchers.length > 0);
         const noteVal = item.row.receivedFrom.trim();
-        const effectiveFrom = hasHallStitchers
-          ? (noteVal || `${item.row.stitcherName} (${rowHall!.name})`)
+        const effectiveFrom = rowHall
+          ? (noteVal || `${item.row.stitcherName} (${rowHall.name})`)
           : noteVal;
         const saved = await persistAndRecordGrnBatch({
           entryPendingOrder: formPendingOrder,
           selectedOrder: activeOrder,
           entryMaker: item.row.maker,
-          entryHallName: hasHallStitchers ? rowHall!.name : (item.row.hallName || ''),
-          entryStitcherName: hasHallStitchers ? (item.row.stitcherName || '') : '',
-          entryReceivingNote: hasHallStitchers ? noteVal : '',
+          entryHallName: rowHall ? rowHall.name : '',
+          entryStitcherName: rowHall ? (item.row.stitcherName || '') : '',
+          entryReceivingNote: rowHall ? noteVal : '',
           entryArticle: activeOrder.article || formArt || '---',
           entryColor: activeOrder.color || formColor || 'Standard',
           entryReceivedFrom: effectiveFrom,
@@ -663,7 +661,8 @@ export function attachGRNHandlers(): void {
     const formHall = (hallSelect?.value ?? state.grnForm.hallName ?? '').trim();
     const formStitcher = (stitcherSelect?.value ?? state.grnForm.stitcherName ?? '').trim();
     const formReceivedFrom = (receivedFromInput?.value ?? state.grnForm.receivedFrom ?? '').trim();
-    const selectedHallObj = findHallByName(formHall);
+    const makerHallObj = findHallByName(formMaker);
+    const selectedHallObj = findHallByName(formHall) || makerHallObj;
     const sizeTotal = calculateSizeTotal(state.grnForm.sizes);
     const rcvdPairs = Math.max(0, parseInt(rcvdPairsInput?.value || '0', 10) || sizeTotal);
     const caps = getGrnRemainingCaps(formPendingOrder, formMaker);
@@ -681,17 +680,28 @@ export function attachGRNHandlers(): void {
         showToast('Choose which allocated contractor delivered these goods.');
         return;
       }
-      if (formHall) {
-        if (!selectedHallObj || selectedHallObj.stitchers.length === 0) {
-          applyFieldValidationErrors([[hallSelect, 'Add stitchers to this Hall in Registry 04 before receiving from it, or clear Hall.']]);
-          showToast(`No stitchers are assigned to ${formHall} in Registry 04 yet.`);
+      if (selectedHallObj) {
+        if (selectedHallObj.stitchers.length === 0) {
+          applyFieldValidationErrors([
+            [hallSelect, `Add stitchers to ${selectedHallObj.name} in Super User Master Registries before receiving.`],
+            [stitcherSelect, `No stitchers assigned to ${selectedHallObj.name}.`]
+          ]);
+          showToast(`No stitchers are assigned to ${selectedHallObj.name}. Add a stitcher in Super User Master Registries first.`);
           return;
         }
-        if (!formStitcher) {
+        const stitcherValid = Boolean(
+          formStitcher &&
+          selectedHallObj.stitchers.some(s => s.name.trim().toLowerCase() === formStitcher.toLowerCase())
+        );
+        if (!stitcherValid) {
           applyFieldValidationErrors([[stitcherSelect, `Select which stitcher in ${selectedHallObj.name} delivered these goods.`]]);
           showToast(`Select a Stitcher from ${selectedHallObj.name}.`);
           return;
         }
+      } else if (formHall) {
+        applyFieldValidationErrors([[hallSelect, 'Selected Hall does not exist in Master Registries.']]);
+        showToast(`Hall "${formHall}" was not found.`);
+        return;
       } else if (!formReceivedFrom) {
         applyFieldValidationErrors([[receivedFromInput, 'Enter the person name goods were received from.']]);
         showToast('Enter the person name in Received From.');
@@ -776,6 +786,35 @@ export function attachGRNHandlers(): void {
   });
 
   // --- Section: Requisition Issuance Queue ---
+  document.getElementById('btn-toggle-inward-issued-queue')?.addEventListener('click', () => {
+    state.inwardShowIssuedQueue = !state.inwardShowIssuedQueue;
+    renderApp();
+  });
+
+  document.getElementById('btn-reprint-issued-req')?.addEventListener('click', () => {
+    const queueSelect = document.getElementById('grn-queue-req-select') as HTMLSelectElement | null;
+    const selectedCode = normalizeBaseReqNumber(queueSelect?.value || state.packingWip.selectedBatch);
+    const targetReq = (state.ordersWipMap as Record<string, any>)[selectedCode] || state.packingWip;
+    const baseReq = normalizeBaseReqNumber(targetReq.selectedBatch || targetReq.reqNumber || selectedCode);
+    const pairs = Number(targetReq.plannedQty || calculateSizeTotal(targetReq.sizes) || 0);
+    if (pairs <= 0) {
+      showToast('No issued requisition selected to reprint.');
+      return;
+    }
+    const slipHtml = buildPackingRequisitionSlipHtml({
+      reqNo: baseReq,
+      date: formatCurrentDateDDMMYYYY(),
+      article: targetReq.article || '---',
+      sizes: targetReq.sizes || createEmptySizes(),
+      totalPairs: pairs,
+      issueStatus: 'Issued by Inward Register',
+      sizeFormat: targetReq.sizeFormat,
+      sizeCodes: targetReq.sizeCodes
+    });
+    openModal(`Issued Requisition Slip — ${baseReq}`, slipHtml, true);
+    printDocument(`Issued Requisition Slip — ${baseReq}`, slipHtml);
+  });
+
   document.getElementById('grn-queue-req-select')?.addEventListener('change', (e) => {
     const select = e.target as HTMLSelectElement;
     if (!select.value) return;
@@ -785,6 +824,11 @@ export function attachGRNHandlers(): void {
 
   // Inward Register Person issues the Packing Hall's Requisition Asking (given available received stock)
   document.getElementById('btn-issue-req-to-packing')?.addEventListener('click', async () => {
+    const queueSelect = document.getElementById('grn-queue-req-select') as HTMLSelectElement | null;
+    const selectedQueueReq = normalizeBaseReqNumber(queueSelect?.value || '');
+    if (selectedQueueReq && selectedQueueReq !== normalizeBaseReqNumber(state.packingWip.selectedBatch)) {
+      switchActiveOrder(selectedQueueReq);
+    }
     const wip = state.packingWip;
     const baseReq = normalizeBaseReqNumber(wip.selectedBatch);
     const askingPairs = wip.plannedQty || calculateSizeTotal(wip.sizes);
@@ -868,21 +912,42 @@ export function attachGRNHandlers(): void {
       saveCurrentOrderWipState();
     }
 
-    const slipHtml = buildPackingRequisitionSlipHtml({
+    const issuedSlipSnapshot = {
       reqNo: baseReq,
-      date: formatCurrentDateDDMMYYYY(),
       article: state.packingWip.article || '---',
-      sizes: state.packingWip.sizes,
+      sizes: { ...(state.packingWip.sizes || {}) },
       totalPairs: evalIssue.askingPairs,
-      issueStatus: 'Issued by Inward Register',
       sizeFormat: (state.packingWip as any).sizeFormat,
       sizeCodes: (state.packingWip as any).sizeCodes
+    };
+
+    const nextPending = Object.values(state.ordersWipMap).find((item: any) =>
+      item &&
+      !item.isVoided &&
+      Number(item.plannedQty || calculateSizeTotal(item.sizes) || 0) > 0 &&
+      item.issueStatus !== 'Issued by Inward Register' &&
+      normalizeBaseReqNumber(item.selectedBatch || item.reqNumber) !== baseReq
+    ) as any;
+    state.inwardShowIssuedQueue = false;
+    if (nextPending) {
+      switchActiveOrder(normalizeBaseReqNumber(nextPending.selectedBatch || nextPending.reqNumber));
+    }
+
+    const slipHtml = buildPackingRequisitionSlipHtml({
+      reqNo: issuedSlipSnapshot.reqNo,
+      date: formatCurrentDateDDMMYYYY(),
+      article: issuedSlipSnapshot.article,
+      sizes: issuedSlipSnapshot.sizes,
+      totalPairs: issuedSlipSnapshot.totalPairs,
+      issueStatus: 'Issued by Inward Register',
+      sizeFormat: issuedSlipSnapshot.sizeFormat,
+      sizeCodes: issuedSlipSnapshot.sizeCodes
     });
 
     renderApp();
-    openModal(`Issued Requisition Slip — ${baseReq}`, slipHtml, true);
-    printDocument(`Issued Requisition Slip — ${baseReq}`, slipHtml);
-    showToast(`Issued ${evalIssue.askingPairs} Pairs for Requisition ${baseReq} from Inward Register to Packing Hall Stage 1!`);
+    openModal(`Issued Requisition Slip — ${issuedSlipSnapshot.reqNo}`, slipHtml, true);
+    printDocument(`Issued Requisition Slip — ${issuedSlipSnapshot.reqNo}`, slipHtml);
+    showToast(`Issued ${issuedSlipSnapshot.totalPairs} Pairs for Requisition ${issuedSlipSnapshot.reqNo} from Inward Register to Packing Hall Stage 1!`);
   });
 
   // Inward Clerk re-issues tailor-repaired pairs back to Packing Hall Stage 1 once Packing Hall has requested re-issue
